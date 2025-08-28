@@ -1,0 +1,5 @@
+{
+  "threshold": 0.7,
+  "unlock_duration": 5,
+  "detection_delay": 3
+}
