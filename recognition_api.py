@@ -457,6 +457,11 @@ class FacialRecognitionAPI:
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
             
             time.sleep(0.033)  # ~30 FPS
+    def relock_door(self):
+        """Relock the door after a timeout"""
+        self.door_locked = True
+        self.door_unlock_available_until = 0
+        logger.info("Door automatically relocked")
     
     
     def setup_esp32_endpoints(self):
