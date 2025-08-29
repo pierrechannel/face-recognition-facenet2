@@ -186,7 +186,7 @@ def internal_error(e):
 
 @app.route('/register')
 # @app.route('/viewer2')  # Keep backward compatibility
-def dashboard():
+def register():
     """Modern Bootstrap-based dashboard for facial recognition system"""
   
     from flask import render_template
