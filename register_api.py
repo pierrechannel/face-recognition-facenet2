@@ -2,7 +2,7 @@ import os
 import torch
 import numpy as np
 from PIL import Image
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 import uuid
 from app.model import load_facenet_model
@@ -23,7 +23,6 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 # Create necessary directories
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(EMBEDDINGS_DIR, exist_ok=True)
-os.makedirs('templates', exist_ok=True)  # Ensure templates directory exists
 
 def load_model(path):
     model = load_facenet_model()
@@ -35,11 +34,6 @@ def load_model(path):
 def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-@app.route('/')
-def index():
-    """Serve the main HTML interface"""
-    return render_template('register.html', device=DEVICE, model_loaded=os.path.exists(MODEL_PATH))
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
@@ -191,6 +185,4 @@ def internal_error(e):
     return jsonify({'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':
-    # Save the HTML template if it doesn't exist
-    template_path = os.path.join('templates', 'index.html')    
     app.run(debug=True, host='0.0.0.0', port=5000)
