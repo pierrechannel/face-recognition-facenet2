@@ -1,0 +1,12 @@
+{
+  "image": "C:\\Users\\HP\\Pictures\\tripleFace\\tripleFace\\WIN_20250819_10_04_29_Pro.jpg",
+  "timestamp": "2025-08-26T19:25:31",
+  "faces_detected": 1,
+  "recognitions": [
+    {
+      "name": "pierre",
+      "distance": 0.0,
+      "recognized": true
+    }
+  ]
+}

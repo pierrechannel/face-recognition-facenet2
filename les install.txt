@@ -1,0 +1,27 @@
+pip install opencv-python
+pip install torch
+pip install Pillow
+pip install facenet-pytorch
+pip install flask
+
+
+
+
+
+
+import cv2
+print(cv2.__version__)
+
+import torch
+print(torch.__version__)
+print(torch.cuda.is_available())  # Pour voir si CUDA est activé
+
+from PIL import Image
+print("Pillow est bien installé.")
+
+from facenet_pytorch import MTCNN, InceptionResnetV1
+print("facenet-pytorch est bien installé.")
+
+
+
+

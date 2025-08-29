@@ -1,0 +1,87 @@
+2025-08-26 21:30:21,477 - __main__ - INFO - Démarrage du système de reconnaissance faciale
+2025-08-26 21:30:21,477 - __main__ - INFO - Device utilisé: cpu
+2025-08-26 21:30:23,196 - __main__ - INFO - Chargement du modèle depuis facenet_africain_finetuned.pth...
+2025-08-26 21:30:24,087 - __main__ - INFO - Modèle chargé avec succès
+2025-08-26 21:30:24,116 - __main__ - INFO - 8 embeddings chargées
+2025-08-26 21:30:24,228 - __main__ - INFO - Détecteur Haar Cascade initialisé
+2025-08-26 21:30:56,219 - __main__ - INFO - Image enregistrée : pierre_2025-08-26_21h30mn56s.jpg
+2025-08-26 21:31:17,946 - __main__ - INFO - Image enregistrée : pierre_2025-08-26_21h31mn17s.jpg
+2025-08-26 21:32:02,774 - __main__ - INFO - Image enregistrée : pierre_2025-08-26_21h32mn02s.jpg
+2025-08-26 21:32:04,336 - __main__ - INFO - Image enregistrée : pierre_2025-08-26_21h32mn04s.jpg
+2025-08-26 21:32:06,959 - __main__ - INFO - Image enregistrée : pierre_2025-08-26_21h32mn06s.jpg
+2025-08-26 21:32:12,137 - __main__ - INFO - Image enregistrée : pierre_2025-08-26_21h32mn12s.jpg
+2025-08-26 21:32:16,002 - __main__ - INFO - Image enregistrée : pierre_2025-08-26_21h32mn16s.jpg
+2025-08-26 21:32:17,326 - __main__ - INFO - Image enregistrée : pierre_2025-08-26_21h32mn17s.jpg
+2025-08-26 21:32:18,140 - __main__ - INFO - Image enregistrée : pierre_2025-08-26_21h32mn18s.jpg
+2025-08-26 21:32:18,820 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:19,083 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:19,210 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:19,338 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:19,469 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:19,597 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:19,843 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:20,096 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:20,226 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:20,354 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:20,727 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:21,347 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:21,831 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:21,956 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:22,084 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:22,206 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:23,560 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:24,193 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:24,940 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:25,066 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:25,192 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:25,325 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:25,588 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:25,710 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:26,347 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:47,028 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:47,166 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:47,318 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:47,470 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:48,192 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:48,481 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:48,789 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:48,947 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:49,104 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:49,266 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:56,533 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:56,689 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:57,370 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:32:58,128 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:33:11,243 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:06,061 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:06,198 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:06,330 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:06,600 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:07,124 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:07,517 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:11,922 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:12,071 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:48,219 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:48,373 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:56,485 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:56,758 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:56,892 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:57,027 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:57,156 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:57,291 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:57,427 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:57,575 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:58,426 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:58,566 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:58,706 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:58,970 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:59,278 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:59,459 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:59,628 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:35:59,773 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:36:02,784 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:36:13,402 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:36:13,579 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:36:13,782 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:36:13,967 - __main__ - INFO - Limite quotidienne atteinte pour pierre
+2025-08-26 21:36:14,128 - __main__ - INFO - Limite quotidienne atteinte pour pierre

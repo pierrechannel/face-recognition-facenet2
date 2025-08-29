@@ -1,0 +1,28 @@
+cd c:\
+
+
+tFace\Scripts\activate
+
+
+cd 'C:\tripleFace'
+
+
+pip freeze > requirements.txt
+
+
+****************
+Crée un nouvel environnement virtuel
+python -m venv tFace
+
+Active l’environnement
+tFace\Scripts\activate
+
+Installe toutes les dépendances :
+pip install -r requirements.txt
+
+
+
+
+
+
+

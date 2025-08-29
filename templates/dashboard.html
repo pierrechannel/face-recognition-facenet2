@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Access Control Dashboard</title>
+    
+    <!-- Bootstrap 5.3 CSS -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.1/font/bootstrap-icons.min.css" rel="stylesheet">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --secondary-color: #1e40af;
+            --success-color: #16a34a;
+            --danger-color: #dc2626;
+            --warning-color: #d97706;
+            --info-color: #0891b2;
+            --dark-color: #1f2937;
+            --light-color: #f8fafc;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #1f2937;
+        }
+
+        .dashboard-container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            margin: 20px;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        .dashboard-header {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+            color: white;
+            padding: 2rem;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .dashboard-header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="20" cy="20" r="2" fill="rgba(255,255,255,0.1)"/><circle cx="80" cy="80" r="2" fill="rgba(255,255,255,0.1)"/><circle cx="40" cy="70" r="1" fill="rgba(255,255,255,0.1)"/><circle cx="90" cy="20" r="1" fill="rgba(255,255,255,0.1)"/><circle cx="10" cy="90" r="1" fill="rgba(255,255,255,0.1)"/></svg>');
+        }
+
+        .dashboard-title {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        .dashboard-subtitle {
+            font-size: 1.1rem;
+            opacity: 0.9;
+            position: relative;
+            z-index: 1;
+        }
+
+        .status-cards {
+            padding: 2rem;
+        }
+
+        .status-card {
+            background: white;
+            border-radius: 15px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+            border: none;
+            transition: all 0.3s ease;
+            height: 100%;
+        }
+
+        .status-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+        }
+
+        .status-icon {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .status-locked { background: linear-gradient(135deg, var(--danger-color), #ef4444); }
+        .status-unlocked { background: linear-gradient(135deg, var(--success-color), #22c55e); }
+        .status-active { background: linear-gradient(135deg, var(--info-color), #06b6d4); }
+        .status-inactive { background: linear-gradient(135deg, #6b7280, #9ca3af); }
+
+        .control-panel {
+            background: #f8fafc;
+            padding: 2rem;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .btn-modern {
+            padding: 0.8rem 1.5rem;
+            border-radius: 10px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            border: none;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-modern::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: left 0.6s;
+        }
+
+        .btn-modern:hover::before {
+            left: 100%;
+        }
+
+        .btn-primary-modern {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+        }
+
+        .btn-success-modern {
+            background: linear-gradient(135deg, var(--success-color), #22c55e);
+            color: white;
+        }
+
+        .btn-danger-modern {
+            background: linear-gradient(135deg, var(--danger-color), #ef4444);
+            color: white;
+        }
+
+        .btn-warning-modern {
+            background: linear-gradient(135deg, var(--warning-color), #f59e0b);
+            color: white;
+        }
+
+        .stream-container {
+            padding: 2rem;
+            background: white;
+        }
+
+        .stream-card {
+            background: #f8fafc;
+            border-radius: 15px;
+            padding: 1.5rem;
+            border: 2px solid #e2e8f0;
+            transition: all 0.3s ease;
+        }
+
+        .stream-card:hover {
+            border-color: var(--primary-color);
+        }
+
+        .stream-video {
+            width: 100%;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            background: #1f2937;
+            min-height: 300px;
+            object-fit: cover;
+        }
+
+        .stream-placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #6b7280;
+            font-size: 1.1rem;
+            min-height: 300px;
+            background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+            border-radius: 10px;
+        }
+
+        .logs-section {
+            background: white;
+            padding: 2rem;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .log-item {
+            background: #f8fafc;
+            border-left: 4px solid var(--primary-color);
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            border-radius: 0 8px 8px 0;
+            transition: all 0.3s ease;
+        }
+
+        .log-item:hover {
+            background: #f1f5f9;
+            transform: translateX(5px);
+        }
+
+        .log-granted {
+            border-left-color: var(--success-color);
+        }
+
+        .log-denied {
+            border-left-color: var(--danger-color);
+        }
+
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            .dashboard-container {
+                margin: 10px;
+            }
+            
+            .dashboard-title {
+                font-size: 2rem;
+            }
+            
+            .status-cards {
+                padding: 1rem;
+            }
+            
+            .stream-container {
+                padding: 1rem;
+            }
+        }
+
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1050;
+            min-width: 300px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            transform: translateX(400px);
+            transition: transform 0.3s ease;
+        }
+
+        .notification.show {
+            transform: translateX(0);
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="dashboard-container">
+            <!-- Header -->
+            <div class="dashboard-header">
+                <div class="dashboard-title">
+                    <i class="bi bi-shield-check me-3"></i>Smart Access Control
+                </div>
+                <div class="dashboard-subtitle">
+                    AI-Powered Facial Recognition Security System
+                </div>
+            </div>
+
+            <!-- Status Cards -->
+            <div class="status-cards">
+                <div class="row g-4">
+                    <div class="col-md-3 col-sm-6">
+                        <div class="status-card">
+                            <div class="status-icon status-locked" id="doorIcon">
+                                <i class="bi bi-lock-fill text-white"></i>
+                            </div>
+                            <h5 class="card-title">Door Status</h5>
+                            <p class="card-text h4 mb-0" id="doorStatus">LOCKED</p>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-sm-6">
+                        <div class="status-card">
+                            <div class="status-icon status-inactive" id="cameraIcon">
+                                <i class="bi bi-camera-video-off text-white"></i>
+                            </div>
+                            <h5 class="card-title">Camera</h5>
+                            <p class="card-text h4 mb-0" id="cameraStatus">INACTIVE</p>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-sm-6">
+                        <div class="status-card">
+                            <div class="status-icon status-inactive" id="recognitionIcon">
+                                <i class="bi bi-person-check text-white"></i>
+                            </div>
+                            <h5 class="card-title">Recognition</h5>
+                            <p class="card-text h4 mb-0" id="recognitionStatus">DISABLED</p>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-sm-6">
+                        <div class="status-card">
+                            <div class="status-icon" id="facesIcon" style="background: linear-gradient(135deg, var(--warning-color), #f59e0b);">
+                                <i class="bi bi-people text-white"></i>
+                            </div>
+                            <h5 class="card-title">Known Faces</h5>
+                            <p class="card-text h4 mb-0" id="knownFaces">0</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Control Panel -->
+            <div class="control-panel">
+                <div class="row g-3">
+                    <div class="col-md-2 col-sm-4 col-6">
+                        <button class="btn btn-primary-modern btn-modern w-100" onclick="startCamera()">
+                            <i class="bi bi-play-fill me-2"></i>Start Camera
+                        </button>
+                    </div>
+                    <div class="col-md-2 col-sm-4 col-6">
+                        <button class="btn btn-danger-modern btn-modern w-100" onclick="stopCamera()">
+                            <i class="bi bi-stop-fill me-2"></i>Stop Camera
+                        </button>
+                    </div>
+                    <div class="col-md-2 col-sm-4 col-6">
+                        <button class="btn btn-warning-modern btn-modern w-100" onclick="toggleRecognition()">
+                            <i class="bi bi-toggle-on me-2"></i>Toggle AI
+                        </button>
+                    </div>
+                    <div class="col-md-2 col-sm-4 col-6">
+                        <button class="btn btn-success-modern btn-modern w-100" onclick="checkAccess()">
+                            <i class="bi bi-search me-2"></i>Check Access
+                        </button>
+                    </div>
+                    <div class="col-md-2 col-sm-4 col-6">
+                        <button class="btn btn-primary-modern btn-modern w-100" onclick="updateStatus()">
+                            <i class="bi bi-arrow-clockwise me-2"></i>Refresh
+                        </button>
+                    </div>
+                    <div class="col-md-2 col-sm-4 col-6">
+                        <button class="btn btn-danger-modern btn-modern w-100" onclick="manualDoorControl()">
+                            <i class="bi bi-unlock me-2"></i>Manual
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Video Streams -->
+            <div class="stream-container">
+                <div class="row g-4">
+                    <div class="col-lg-6">
+                        <div class="stream-card">
+                            <h5 class="mb-3">
+                                <i class="bi bi-camera-video me-2 text-primary"></i>Live Video Feed
+                            </h5>
+                            <div class="stream-placeholder" id="rawStreamContainer">
+                                <div class="text-center">
+                                    <i class="bi bi-camera-video-off display-4 text-muted mb-3"></i>
+                                    <p>Camera Not Active</p>
+                                </div>
+                            </div>
+                            <img id="rawStream" class="stream-video d-none" alt="Raw video stream">
+                        </div>
+                    </div>
+                    <div class="col-lg-6">
+                        <div class="stream-card">
+                            <h5 class="mb-3">
+                                <i class="bi bi-robot me-2 text-success"></i>AI Recognition Feed
+                            </h5>
+                            <div class="stream-placeholder" id="recognitionStreamContainer">
+                                <div class="text-center">
+                                    <i class="bi bi-person-x display-4 text-muted mb-3"></i>
+                                    <p>AI Recognition Inactive</p>
+                                </div>
+                            </div>
+                            <img id="recognitionStream" class="stream-video d-none" alt="Recognition stream">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Access Logs -->
+            <div class="logs-section">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <h4><i class="bi bi-journal-text me-2 text-primary"></i>Recent Access Logs</h4>
+                    <button class="btn btn-outline-primary btn-sm" onclick="loadLogs()">
+                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh Logs
+                    </button>
+                </div>
+                <div id="accessLogs">
+                    <div class="text-center text-muted py-4">
+                        <i class="bi bi-hourglass-split display-4 mb-3"></i>
+                        <p>Loading access logs...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Template -->
+    <div class="notification" id="notification">
+        <div class="alert mb-0" role="alert">
+            <div class="d-flex align-items-center">
+                <div class="flex-grow-1" id="notificationContent"></div>
+                <button type="button" class="btn-close" onclick="hideNotification()"></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap 5.3 JS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        // Global state
+        let streamActive = false;
+        let recognitionActive = false;
+        let doorLocked = true;
+
+        // Utility functions
+        function showNotification(message, type = 'info') {
+            const notification = document.getElementById('notification');
+            const content = document.getElementById('notificationContent');
+            const alertDiv = notification.querySelector('.alert');
+            
+            // Set alert class based on type
+            alertDiv.className = `alert alert-${type} mb-0`;
+            
+            // Set icon based on type
+            let icon = 'bi-info-circle';
+            if (type === 'success') icon = 'bi-check-circle';
+            else if (type === 'danger') icon = 'bi-exclamation-circle';
+            else if (type === 'warning') icon = 'bi-exclamation-triangle';
+            
+            content.innerHTML = `<i class="bi ${icon} me-2"></i>${message}`;
+            
+            notification.classList.add('show');
+            
+            // Auto-hide after 5 seconds
+            setTimeout(hideNotification, 5000);
+        }
+
+        function hideNotification() {
+            document.getElementById('notification').classList.remove('show');
+        }
+
+        function updateStreamVisibility() {
+            const rawStream = document.getElementById('rawStream');
+            const rawContainer = document.getElementById('rawStreamContainer');
+            const recognitionStream = document.getElementById('recognitionStream');
+            const recognitionContainer = document.getElementById('recognitionStreamContainer');
+
+            if (streamActive) {
+                rawStream.classList.remove('d-none');
+                rawContainer.classList.add('d-none');
+                rawStream.src = '/stream/video?' + new Date().getTime();
+            } else {
+                rawStream.classList.add('d-none');
+                rawContainer.classList.remove('d-none');
+            }
+
+            if (streamActive && recognitionActive) {
+                recognitionStream.classList.remove('d-none');
+                recognitionContainer.classList.add('d-none');
+                recognitionStream.src = '/stream/recognition?' + new Date().getTime();
+            } else {
+                recognitionStream.classList.add('d-none');
+                recognitionContainer.classList.remove('d-none');
+            }
+        }
+
+        // API Functions
+        async function startCamera() {
+            try {
+                showNotification('Starting camera...', 'info');
+                
+                const response = await fetch('/camera/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ recognition: true })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    streamActive = true;
+                    recognitionActive = data.recognition_enabled;
+                    showNotification(data.message, 'success');
+                    updateStatus();
+                    setTimeout(updateStreamVisibility, 1000);
+                } else {
+                    showNotification(data.message, 'danger');
+                }
+            } catch (error) {
+                showNotification('Error starting camera: ' + error.message, 'danger');
+            }
+        }
+
+        async function stopCamera() {
+            try {
+                showNotification('Stopping camera...', 'info');
+                
+                const response = await fetch('/camera/stop', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    streamActive = false;
+                    recognitionActive = false;
+                    showNotification(data.message, 'success');
+                    updateStatus();
+                    updateStreamVisibility();
+                } else {
+                    showNotification(data.message, 'danger');
+                }
+            } catch (error) {
+                showNotification('Error stopping camera: ' + error.message, 'danger');
+            }
+        }
+
+        async function toggleRecognition() {
+            try {
+                const response = await fetch('/stream/toggle-recognition', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    recognitionActive = data.recognition_enabled;
+                    showNotification(data.message, 'success');
+                    updateStatus();
+                    updateStreamVisibility();
+                } else {
+                    showNotification(data.message, 'danger');
+                }
+            } catch (error) {
+                showNotification('Error toggling recognition: ' + error.message, 'danger');
+            }
+        }
+
+        async function checkAccess() {
+            try {
+                showNotification('Checking access...', 'info');
+                
+                const response = await fetch('/access/check', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    const result = data.access_result;
+                    if (result.access_granted) {
+                        showNotification(`🎉 Access granted to ${result.person}!`, 'success');
+                    } else {
+                        showNotification(`❌ Access denied (${result.faces_detected} faces detected)`, 'warning');
+                    }
+                    updateStatus();
+                    loadLogs();
+                } else {
+                    showNotification(data.message, 'danger');
+                }
+            } catch (error) {
+                showNotification('Error checking access: ' + error.message, 'danger');
+            }
+        }
+
+        async function manualDoorControl() {
+            try {
+                const action = doorLocked ? 'unlock' : 'lock';
+                const response = await fetch(`/door/${action}`, { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    doorLocked = data.door_locked;
+                    showNotification(data.message, 'success');
+                    updateStatus();
+                } else {
+                    showNotification(data.message, 'danger');
+                }
+            } catch (error) {
+                showNotification('Error controlling door: ' + error.message, 'danger');
+            }
+        }
+
+        async function updateStatus() {
+            try {
+                const [statusResponse, streamResponse] = await Promise.all([
+                    fetch('/status'),
+                    fetch('/stream/status')
+                ]);
+                
+                const statusData = await statusResponse.json();
+                const streamData = await streamResponse.json();
+                
+                // Update door status
+                doorLocked = statusData.door_locked;
+                const doorIcon = document.getElementById('doorIcon');
+                const doorStatus = document.getElementById('doorStatus');
+                
+                if (doorLocked) {
+                    doorIcon.className = 'status-icon status-locked';
+                    doorIcon.innerHTML = '<i class="bi bi-lock-fill text-white"></i>';
+                    doorStatus.textContent = 'LOCKED';
+                } else {
+                    doorIcon.className = 'status-icon status-unlocked pulse';
+                    doorIcon.innerHTML = '<i class="bi bi-unlock-fill text-white"></i>';
+                    doorStatus.textContent = 'UNLOCKED';
+                }
+                
+                // Update camera status
+                streamActive = statusData.camera_active;
+                const cameraIcon = document.getElementById('cameraIcon');
+                const cameraStatus = document.getElementById('cameraStatus');
+                
+                if (streamActive) {
+                    cameraIcon.className = 'status-icon status-active';
+                    cameraIcon.innerHTML = '<i class="bi bi-camera-video text-white"></i>';
+                    cameraStatus.textContent = 'ACTIVE';
+                } else {
+                    cameraIcon.className = 'status-icon status-inactive';
+                    cameraIcon.innerHTML = '<i class="bi bi-camera-video-off text-white"></i>';
+                    cameraStatus.textContent = 'INACTIVE';
+                }
+                
+                // Update recognition status
+                recognitionActive = streamData.recognition_enabled;
+                const recognitionIcon = document.getElementById('recognitionIcon');
+                const recognitionStatus = document.getElementById('recognitionStatus');
+                
+                if (recognitionActive) {
+                    recognitionIcon.className = 'status-icon status-active pulse';
+                    recognitionIcon.innerHTML = '<i class="bi bi-person-check text-white"></i>';
+                    recognitionStatus.textContent = 'ENABLED';
+                } else {
+                    recognitionIcon.className = 'status-icon status-inactive';
+                    recognitionIcon.innerHTML = '<i class="bi bi-person-x text-white"></i>';
+                    recognitionStatus.textContent = 'DISABLED';
+                }
+                
+                // Update known faces count
+                document.getElementById('knownFaces').textContent = statusData.known_faces_count;
+                
+            } catch (error) {
+                showNotification('Error updating status: ' + error.message, 'danger');
+            }
+        }
+
+        async function loadLogs() {
+            try {
+                const response = await fetch('/logs?limit=10');
+                const data = await response.json();
+                
+                const logsContainer = document.getElementById('accessLogs');
+                
+                if (data.success && data.logs.length > 0) {
+                    logsContainer.innerHTML = data.logs.reverse().map(log => `
+                        <div class="log-item ${log.status === 'GRANTED' ? 'log-granted' : 'log-denied'}">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <strong>${log.name}</strong>
+                                    <span class="badge bg-${log.status === 'GRANTED' ? 'success' : 'danger'} ms-2">
+                                        ${log.status}
+                                    </span>
+                                </div>
+                                <small class="text-muted">${log.timestamp}</small>
+                            </div>
+                            ${log.confidence !== 'N/A' ? `<small class="text-muted">Confidence: ${log.confidence}</small>` : ''}
+                        </div>
+                    `).join('');
+                } else {
+                    logsContainer.innerHTML = `
+                        <div class="text-center text-muted py-4">
+                            <i class="bi bi-journal-x display-4 mb-3"></i>
+                            <p>No access logs available</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                document.getElementById('accessLogs').innerHTML = `
+                    <div class="text-center text-danger py-4">
+                        <i class="bi bi-exclamation-circle display-4 mb-3"></i>
+                        <p>Error loading logs: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            updateStatus();
+            loadLogs();
+            
+            // Auto-refresh every 5 seconds
+            setInterval(updateStatus, 5000);
+            
+            // Auto-refresh logs every 30 seconds
+            setInterval(loadLogs, 30000);
+            
+            // Handle stream errors
+            document.getElementById('rawStream').onerror = function() {
+                this.classList.add('d-none');
+                document.getElementById('rawStreamContainer').classList.remove('d-none');
+            };
+            
+            document.getElementById('recognitionStream').onerror = function() {
+                this.classList.add('d-none');
+                document.getElementById('recognitionStreamContainer').classList.remove('d-none');
+            };
+        });
+
+        // Handle visibility change to pause/resume streams
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden) {
+                // Page is hidden, could pause streams
+            } else {
+                // Page is visible, resume streams
+                if (streamActive) {
+                    updateStreamVisibility();
+                }
+            }
+        });
+    </script>
+</body>
+</html>
