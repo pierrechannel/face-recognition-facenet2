@@ -39,7 +39,7 @@ def allowed_file(filename):
 @app.route('/')
 def index():
     """Serve the main HTML interface"""
-    return render_template('index.html', device=DEVICE, model_loaded=os.path.exists(MODEL_PATH))
+    return render_template('re.html', device=DEVICE, model_loaded=os.path.exists(MODEL_PATH))
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
