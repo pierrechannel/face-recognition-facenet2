@@ -191,4 +191,5 @@ def register():
     return render_template('register.html')
 
 if __name__ == '__main__':
+    template_path = os.path.join('templates', 'index.html')
     app.run(debug=True, host='0.0.0.0', port=5000)
