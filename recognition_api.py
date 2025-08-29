@@ -65,7 +65,7 @@ class FacialRecognitionAPI:
         # Load resources
         self.load_resources()
     
-    def load_resources(self):
+    def load_resources(self): 
         """Load model and embeddings"""
         try:
             logger.info("Loading facial recognition model...")
