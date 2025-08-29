@@ -185,12 +185,12 @@ def internal_error(e):
     return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/register')
-@app.route('/viewer2')  # Keep backward compatibility
+# @app.route('/viewer2')  # Keep backward compatibility
 def dashboard():
     """Modern Bootstrap-based dashboard for facial recognition system"""
   
     from flask import render_template
-    return render_template('dashboard.html')
+    return render_template('register.html')
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
