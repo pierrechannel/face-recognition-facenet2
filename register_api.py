@@ -185,7 +185,7 @@ def internal_error(e):
     return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/register')
-# @app.route('/viewer2')  # Keep backward compatibility
+@app.route('/viewer')  # Keep backward compatibility
 def register():  
     from flask import render_template
     return render_template('register.html')
