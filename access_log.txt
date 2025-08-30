@@ -271,3 +271,9 @@
 [2025-08-30 12:55:02] pierre - GRANTED - 33.1%
 [2025-08-30 12:55:08] pierre - GRANTED - 33.0%
 [2025-08-30 12:55:14] pierre - GRANTED - 45.7%
+[2025-08-30 12:55:28] pierre - GRANTED - 45.5%
+[2025-08-30 12:55:35] pierre - GRANTED - 40.3%
+[2025-08-30 12:55:39] pierre - GRANTED - 31.2%
+[2025-08-30 12:55:42] pierre - GRANTED - 33.8%
+[2025-08-30 12:55:45] pierre - GRANTED - 38.6%
+[2025-08-30 12:55:54] pierre - GRANTED - 45.9%
