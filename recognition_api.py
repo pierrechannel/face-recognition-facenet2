@@ -366,34 +366,33 @@ class FacialRecognitionAPI:
         }
     
     def unlock_door(self, name, distance):
-        """Unlock the door for recognized person"""
-        # Always update the door state when a known person is recognized
-        self.door_locked = False
-        
-        # Update last recognition
-        self.last_recognition = {
-            'name': name,
-            'timestamp': datetime.now().isoformat(),
-            'confidence': (1 - distance) * 100,
-            'status': 'GRANTED'
-        }
-        
-        # Log the access
-        self.log_access(name, "GRANTED", distance)
-        
-        logger.info(f"Access granted to {name}")
-        
-        # Set a timestamp for when the unlock window expires (extend to 30 seconds)
-        self.door_unlock_available_until = time.time() + 30  # 30 seconds window
-        
-        # Cancel any existing auto-relock timer and start a new one with longer duration
-        if hasattr(self, '_relock_timer') and self._relock_timer:
-            self._relock_timer.cancel()
-        
-        # Set timer to relock after 30 seconds (matches the unlock window)
-        self._relock_timer = threading.Timer(30.0, self.relock_door)
-        self._relock_timer.start()
-          
+    """Unlock the door for recognized person"""
+    # Unlock the door
+    self.door_locked = False
+    
+    # Update last recognition
+    self.last_recognition = {
+        'name': name,
+        'timestamp': datetime.now().isoformat(),
+        'confidence': (1 - distance) * 100,
+        'status': 'GRANTED'
+    }
+    
+    # Log the access
+    self.log_access(name, "GRANTED", distance)
+    
+    logger.info(f"Access granted to {name}")
+    
+    # Set a timestamp for when the unlock window expires (10 seconds)
+    self.door_unlock_available_until = time.time() + 10
+    
+    # Cancel any existing auto-relock timer and start a new one
+    if hasattr(self, '_relock_timer') and self._relock_timer:
+        self._relock_timer.cancel()
+    
+    # Set timer to relock after 10 seconds
+    self._relock_timer = threading.Timer(10.0, self.relock_door)
+    self._relock_timer.start()    
     def deny_access(self):
         """Deny access for unknown person"""
         self.last_recognition = {
