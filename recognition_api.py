@@ -366,33 +366,33 @@ class FacialRecognitionAPI:
         }
     
     def unlock_door(self, name, distance):
-    """Unlock the door for recognized person"""
-    # Unlock the door
-    self.door_locked = False
-    
-    # Update last recognition
-    self.last_recognition = {
-        'name': name,
-        'timestamp': datetime.now().isoformat(),
-        'confidence': (1 - distance) * 100,
-        'status': 'GRANTED'
-    }
-    
-    # Log the access
-    self.log_access(name, "GRANTED", distance)
-    
-    logger.info(f"Access granted to {name}")
-    
-    # Set a timestamp for when the unlock window expires (10 seconds)
-    self.door_unlock_available_until = time.time() + 10
-    
-    # Cancel any existing auto-relock timer and start a new one
-    if hasattr(self, '_relock_timer') and self._relock_timer:
-        self._relock_timer.cancel()
-    
-    # Set timer to relock after 10 seconds
-    self._relock_timer = threading.Timer(10.0, self.relock_door)
-    self._relock_timer.start()    
+        """Unlock the door for recognized person"""
+        # Unlock the door
+        self.door_locked = False
+        
+        # Update last recognition
+        self.last_recognition = {
+            'name': name,
+            'timestamp': datetime.now().isoformat(),
+            'confidence': (1 - distance) * 100,
+            'status': 'GRANTED'
+        }
+        
+        # Log the access
+        self.log_access(name, "GRANTED", distance)
+        
+        logger.info(f"Access granted to {name}")
+        
+        # Set a timestamp for when the unlock window expires (10 seconds)
+        self.door_unlock_available_until = time.time() + 10
+        
+        # Cancel any existing auto-relock timer and start a new one
+        if hasattr(self, '_relock_timer') and self._relock_timer:
+            self._relock_timer.cancel()
+        
+        # Set timer to relock after 10 seconds
+        self._relock_timer = threading.Timer(10.0, self.relock_door)
+        self._relock_timer.start()    
     def deny_access(self):
         """Deny access for unknown person"""
         self.last_recognition = {
@@ -726,46 +726,19 @@ def toggle_recognition():
 # Add this route to your Flask app for ESP32 to check door status
 @app.route('/esp32/door-status', methods=['GET'])
 def esp32_door_status():
-    """Endpoint for ESP32 to check if door should be opened"""
+    """Endpoint for ESP32 to check door lock status"""
     try:
-        current_time = time.time()
-        
-        # Check if we have a valid unlock window
-        should_unlock = (
-            face_api.last_recognition and 
-            face_api.last_recognition.get('status') == 'GRANTED' and
-            current_time <= face_api.door_unlock_available_until and
-            not face_api.door_locked
-        )
-        
-        if should_unlock:
-            # Get person info before clearing
-            person_name = face_api.last_recognition.get('name', 'KNOWN')
-            
-            # Clear the unlock window to prevent multiple unlocks
-            face_api.door_unlock_available_until = 0
-            
-            return jsonify({
-                'open_door': True,
-                'person': person_name,
-                'timestamp': datetime.now().isoformat(),
-                'message': 'Access granted'
-            })
-        
         return jsonify({
-            'open_door': False,
-            'message': 'No access granted recently',
-            'timestamp': datetime.now().isoformat(),
-            'door_locked': face_api.door_locked
+            'door_locked': face_api.door_locked,
+            'unlock_available': face_api.is_unlock_window_valid(),
+            'last_recognition': face_api.last_recognition,
+            'timestamp': datetime.now().isoformat()
         })
-        
     except Exception as e:
         return jsonify({
-            'open_door': False,
             'error': str(e),
             'timestamp': datetime.now().isoformat()
         }), 500
-
 @app.route('/esp32/simple-status', methods=['GET'])
 def esp32_simple_status():
     """Simplified status endpoint for ESP32"""
