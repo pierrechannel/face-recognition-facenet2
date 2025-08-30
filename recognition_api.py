@@ -393,6 +393,7 @@ class FacialRecognitionAPI:
         # Set timer to relock after 10 seconds
         self._relock_timer = threading.Timer(10.0, self.relock_door)
         self._relock_timer.start()    
+    
     def deny_access(self):
         """Deny access for unknown person"""
         self.last_recognition = {
