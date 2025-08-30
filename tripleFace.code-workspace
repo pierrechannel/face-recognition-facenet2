@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "warehouse_doorlock",
+			"path": "../../../Documents/PlatformIO/Projects/warehouse_doorlock"
+		}
+	],
+	"settings": {}
+}
