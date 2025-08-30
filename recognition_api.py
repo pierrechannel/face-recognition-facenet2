@@ -753,19 +753,32 @@ def esp32_simple_status():
             face_api.last_recognition and 
             face_api.last_recognition.get('status') == 'GRANTED' and
             current_time <= face_api.door_unlock_available_until and
-            not face_api.door_locked
+            not face_api.door_locked  # This condition prevents opening if door is already locked
         )
         
         if should_open:
             person_name = face_api.last_recognition.get('name', 'KNOWN')
             
-            # Clear the unlock window
+            # Unlock the door (sets door_locked = False and handles timers)
+            face_api.door_locked = False
+            
+            # Clear the unlock window to prevent multiple opens
             face_api.door_unlock_available_until = 0
+            
+            # Set up auto-relock timer (5 seconds) - cancel any existing timer first
+            if hasattr(face_api, '_esp32_relock_timer') and face_api._esp32_relock_timer:
+                face_api._esp32_relock_timer.cancel()
+            
+            face_api._esp32_relock_timer = threading.Timer(5.0, face_api.relock_door)
+            face_api._esp32_relock_timer.start()
+            
+            logger.info(f"Door unlocked via ESP32 for {person_name}")
             
             response_data = {
                 'open': 1,
                 'message': 'ACCESS_GRANTED',
-                'person': person_name
+                'person': person_name,
+                'door_locked': False
             }
         else:
             response_data = {
@@ -778,6 +791,7 @@ def esp32_simple_status():
         
     except Exception as e:
         return jsonify({'open': 0, 'error': str(e)}), 500
+    
 @app.route('/esp32/status', methods=['GET'])
 def esp32_status():
     """Endpoint for ESP32 to get system status"""
