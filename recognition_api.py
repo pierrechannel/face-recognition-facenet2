@@ -739,6 +739,7 @@ def esp32_door_status():
             'error': str(e),
             'timestamp': datetime.now().isoformat()
         }), 500
+        
 @app.route('/esp32/simple-status', methods=['GET'])
 def esp32_simple_status():
     """Simplified status endpoint for ESP32"""
