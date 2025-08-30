@@ -466,6 +466,11 @@ class FacialRecognitionAPI:
         """Setup endpoints that ESP32 will call"""
         # This is just for documentation - the routes are already defined above
         pass
+    def start_relock_countdown(self):
+        """Start the relock countdown (called after initial delay)"""
+        # Wait additional 10 seconds before relocking
+        self._relock_timer = threading.Timer(10.0, self.relock_door)
+        self._relock_timer.start()
 
 # Initialize the API
 face_api = FacialRecognitionAPI()
