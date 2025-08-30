@@ -383,17 +383,18 @@ class FacialRecognitionAPI:
         
         logger.info(f"Access granted to {name}")
         
-        # Set a timestamp for when the unlock window expires (10 seconds)
-        self.door_unlock_available_until = time.time() + 10
+        # Set a timestamp for when the unlock window expires (15 seconds total)
+        self.door_unlock_available_until = time.time() + 15
         
         # Cancel any existing auto-relock timer and start a new one
         if hasattr(self, '_relock_timer') and self._relock_timer:
             self._relock_timer.cancel()
         
-        # Set timer to relock after 10 seconds
-        self._relock_timer = threading.Timer(10.0, self.relock_door)
-        self._relock_timer.start()    
-    
+        # Wait 5 seconds before starting the relock countdown
+        # This gives the person time to enter
+        self._relock_timer = threading.Timer(5.0, self.start_relock_countdown)
+        self._relock_timer.start()
+        
     def deny_access(self):
         """Deny access for unknown person"""
         self.last_recognition = {
