@@ -409,13 +409,13 @@ class FacialRecognitionAPI:
         logger.info("Access denied - unknown person")
     
     def relock_door(self):
-        """Relock the door"""
+        """Relock the door after a timeout"""
         self.door_locked = True
         self.door_unlock_available_until = 0  # Clear any remaining unlock window
         if hasattr(self, '_relock_timer'):
             self._relock_timer = None
         logger.info("Door automatically relocked")
-        # 6. Add a method to check if unlock window is still valid
+        
     def is_unlock_window_valid(self):
         """Check if the unlock window is still valid"""
         return time.time() <= self.door_unlock_available_until
