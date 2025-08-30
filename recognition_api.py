@@ -3,7 +3,8 @@ import cv2
 import torch
 import time
 import numpy as np
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, render_template_string
+from flask_socketio import SocketIO, emit
 from PIL import Image
 from datetime import datetime
 import threading
@@ -23,6 +24,7 @@ from app.db import load_embedding
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for web clients
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -58,6 +60,10 @@ class FacialRecognitionAPI:
         self.stream_with_recognition = False
         self.fps_counter = 0
         self.fps_start_time = time.time()
+        
+        # Real-time detection variables
+        self.last_detection_time = 0
+        self.detection_cooldown = 2.0  # Seconds between detections
         
         # Create directories
         os.makedirs(self.CAPTURE_DIR, exist_ok=True)
@@ -144,6 +150,13 @@ class FacialRecognitionAPI:
                             self.stream_with_recognition = enable_recognition
                             logger.info(f"Camera stream started on camera {camera_id} (recognition: {enable_recognition})")
                             
+                            # Emit camera started event
+                            socketio.emit('camera_status', {
+                                'active': True,
+                                'recognition_enabled': enable_recognition,
+                                'timestamp': datetime.now().isoformat()
+                            })
+                            
                             while self.is_running:
                                 ret, frame = cap.read()
                                 if ret:
@@ -159,7 +172,13 @@ class FacialRecognitionAPI:
                                         
                                         # Process recognition if enabled
                                         if self.stream_with_recognition:
-                                            self.annotated_frame = self.annotate_frame_with_recognition(frame.copy())
+                                            faces = self.detect_and_recognize_faces(frame.copy())
+                                            self.annotated_frame = self.annotate_frame_with_recognition(frame.copy(), faces)
+                                            
+                                            # Check for detections and emit real-time updates
+                                            if faces and (current_time - self.last_detection_time) > self.detection_cooldown:
+                                                self.last_detection_time = current_time
+                                                self.emit_detection_update(faces)
                                         else:
                                             self.annotated_frame = frame.copy()
                                             
@@ -170,14 +189,29 @@ class FacialRecognitionAPI:
                         continue
                 else:
                     logger.error("No cameras available")
+                    socketio.emit('camera_status', {
+                        'active': False,
+                        'error': 'No cameras available',
+                        'timestamp': datetime.now().isoformat()
+                    })
                     
             except Exception as e:
                 logger.error(f"Camera stream error: {e}")
+                socketio.emit('camera_status', {
+                    'active': False,
+                    'error': str(e),
+                    'timestamp': datetime.now().isoformat()
+                })
             finally:
                 self.cap = None
                 with self.frame_lock:
                     self.current_frame = None
                     self.annotated_frame = None
+                
+                socketio.emit('camera_status', {
+                    'active': False,
+                    'timestamp': datetime.now().isoformat()
+                })
         
         if not self.is_running:
             self.is_running = True
@@ -191,6 +225,12 @@ class FacialRecognitionAPI:
         self.stream_with_recognition = False
         if self.cap:
             self.cap = None
+        
+        # Emit camera stopped event
+        socketio.emit('camera_status', {
+            'active': False,
+            'timestamp': datetime.now().isoformat()
+        })
     
     def get_current_frame(self, annotated=False):
         """Get the current frame from camera stream"""
@@ -235,9 +275,10 @@ class FacialRecognitionAPI:
         
         return results
     
-    def annotate_frame_with_recognition(self, frame):
+    def annotate_frame_with_recognition(self, frame, faces=None):
         """Annotate frame with face recognition results"""
-        faces = self.detect_and_recognize_faces(frame)
+        if faces is None:
+            faces = self.detect_and_recognize_faces(frame)
         
         for face in faces:
             x, y, w, h = face['bbox']
@@ -342,6 +383,34 @@ class FacialRecognitionAPI:
             t2 = torch.tensor(t2)
         return torch.norm(t1 - t2).item()
     
+    def emit_detection_update(self, faces):
+        """Emit real-time detection updates to frontend"""
+        recognized_faces = [f for f in faces if f['recognized']]
+        
+        # Check for access
+        access_result = self.process_access_request(faces)
+        
+        # Emit detection event
+        socketio.emit('face_detection', {
+            'faces': faces,
+            'recognized_count': len(recognized_faces),
+            'access_result': access_result,
+            'door_status': {
+                'locked': self.door_locked,
+                'unlock_window_valid': self.is_unlock_window_valid()
+            },
+            'timestamp': datetime.now().isoformat()
+        })
+        
+        # If access granted, emit specific event
+        if access_result['access_granted']:
+            socketio.emit('access_granted', {
+                'person': access_result['person'],
+                'confidence': recognized_faces[0]['confidence'] if recognized_faces else 0,
+                'door_locked': self.door_locked,
+                'timestamp': datetime.now().isoformat()
+            })
+    
     def process_access_request(self, recognized_faces):
         """Process access request based on recognized faces"""
         access_granted = False
@@ -391,9 +460,16 @@ class FacialRecognitionAPI:
             self._relock_timer.cancel()
         
         # Wait 5 seconds before starting the relock countdown
-        # This gives the person time to enter
         self._relock_timer = threading.Timer(5.0, self.start_relock_countdown)
         self._relock_timer.start()
+        
+        # Emit door status update
+        socketio.emit('door_status', {
+            'locked': False,
+            'person': name,
+            'action': 'unlocked',
+            'timestamp': datetime.now().isoformat()
+        })
         
     def deny_access(self):
         """Deny access for unknown person"""
@@ -408,14 +484,33 @@ class FacialRecognitionAPI:
         self.log_access("UNKNOWN", "DENIED", 1.0)
         
         logger.info("Access denied - unknown person")
+        
+        # Emit access denied event
+        socketio.emit('access_denied', {
+            'reason': 'Unknown person',
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    def start_relock_countdown(self):
+        """Start the relock countdown (called after initial delay)"""
+        # Wait additional 10 seconds before relocking
+        self._relock_timer = threading.Timer(10.0, self.relock_door)
+        self._relock_timer.start()
     
     def relock_door(self):
         """Relock the door after a timeout"""
         self.door_locked = True
-        self.door_unlock_available_until = 0  # Clear any remaining unlock window
+        self.door_unlock_available_until = 0
         if hasattr(self, '_relock_timer'):
             self._relock_timer = None
         logger.info("Door automatically relocked")
+        
+        # Emit door status update
+        socketio.emit('door_status', {
+            'locked': True,
+            'action': 'auto_locked',
+            'timestamp': datetime.now().isoformat()
+        })
         
     def is_unlock_window_valid(self):
         """Check if the unlock window is still valid"""
@@ -439,6 +534,9 @@ class FacialRecognitionAPI:
         # Save to log file
         with open("access_log.txt", "a") as f:
             f.write(f"[{timestamp}] {name} - {status} - {confidence}\n")
+        
+        # Emit log update
+        socketio.emit('log_update', log_entry)
     
     def frame_to_base64(self, frame):
         """Convert frame to base64 string"""
@@ -460,20 +558,36 @@ class FacialRecognitionAPI:
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
             
             time.sleep(0.033)  # ~30 FPS
-    
-    
-    def setup_esp32_endpoints(self):
-        """Setup endpoints that ESP32 will call"""
-        # This is just for documentation - the routes are already defined above
-        pass
-    def start_relock_countdown(self):
-        """Start the relock countdown (called after initial delay)"""
-        # Wait additional 10 seconds before relocking
-        self._relock_timer = threading.Timer(10.0, self.relock_door)
-        self._relock_timer.start()
 
 # Initialize the API
 face_api = FacialRecognitionAPI()
+
+# Socket.IO Events
+@socketio.on('connect')
+def handle_connect():
+    """Handle client connection"""
+    emit('status', {
+        'door_locked': face_api.door_locked,
+        'camera_active': face_api.is_running,
+        'known_faces_count': len(face_api.saved_embeddings),
+        'timestamp': datetime.now().isoformat()
+    })
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle client disconnection"""
+    logger.info('Client disconnected')
+
+@socketio.on('request_status')
+def handle_status_request():
+    """Handle status request from client"""
+    emit('status', {
+        'door_locked': face_api.door_locked,
+        'camera_active': face_api.is_running,
+        'last_recognition': face_api.last_recognition,
+        'known_faces_count': len(face_api.saved_embeddings),
+        'timestamp': datetime.now().isoformat()
+    })
 
 # API Routes
 @app.route('/health', methods=['GET'])
@@ -498,7 +612,6 @@ def get_status():
         'known_faces_count': len(face_api.saved_embeddings),
         'threshold': face_api.THRESHOLD
     })
-
 
 @app.route('/camera/start', methods=['POST'])
 def start_camera():
@@ -615,6 +728,14 @@ def check_access():
 def lock_door():
     """Manually lock the door"""
     face_api.door_locked = True
+    
+    # Emit door status update
+    socketio.emit('door_status', {
+        'locked': True,
+        'action': 'manually_locked',
+        'timestamp': datetime.now().isoformat()
+    })
+    
     return jsonify({
         'message': 'Door locked',
         'success': True,
@@ -625,8 +746,17 @@ def lock_door():
 def unlock_door_manual():
     """Manually unlock the door"""
     face_api.door_locked = False
+    
     # Auto-relock after 5 seconds
     threading.Timer(5.0, face_api.relock_door).start()
+    
+    # Emit door status update
+    socketio.emit('door_status', {
+        'locked': False,
+        'action': 'manually_unlocked',
+        'timestamp': datetime.now().isoformat()
+    })
+    
     return jsonify({
         'message': 'Door unlocked (will auto-relock in 5 seconds)',
         'success': True,
@@ -724,13 +854,19 @@ def toggle_recognition():
     
     face_api.stream_with_recognition = not face_api.stream_with_recognition
     
+    # Emit recognition toggle event
+    socketio.emit('recognition_toggle', {
+        'enabled': face_api.stream_with_recognition,
+        'timestamp': datetime.now().isoformat()
+    })
+    
     return jsonify({
         'success': True,
         'message': f'Recognition {"enabled" if face_api.stream_with_recognition else "disabled"}',
         'recognition_enabled': face_api.stream_with_recognition
     })
 
-# Add this route to your Flask app for ESP32 to check door status
+# ESP32 endpoints
 @app.route('/esp32/door-status', methods=['GET'])
 def esp32_door_status():
     """Endpoint for ESP32 to check door lock status"""
@@ -757,14 +893,13 @@ def esp32_simple_status():
         should_open = (
             face_api.last_recognition and 
             face_api.last_recognition.get('status') == 'GRANTED' and
-            current_time <= face_api.door_unlock_available_until and
-            not face_api.door_locked  # This condition prevents opening if door is already locked
+            current_time <= face_api.door_unlock_available_until
         )
         
         if should_open:
             person_name = face_api.last_recognition.get('name', 'KNOWN')
             
-            # Unlock the door (sets door_locked = False and handles timers)
+            # Actually unlock the door
             face_api.door_locked = False
             
             # Clear the unlock window to prevent multiple opens
@@ -778,6 +913,14 @@ def esp32_simple_status():
             face_api._esp32_relock_timer.start()
             
             logger.info(f"Door unlocked via ESP32 for {person_name}")
+            
+            # Emit door unlock event
+            socketio.emit('door_status', {
+                'locked': False,
+                'person': person_name,
+                'action': 'esp32_unlock',
+                'timestamp': datetime.now().isoformat()
+            })
             
             response_data = {
                 'open': 1,
@@ -796,7 +939,7 @@ def esp32_simple_status():
         
     except Exception as e:
         return jsonify({'open': 0, 'error': str(e)}), 500
-    
+
 @app.route('/esp32/status', methods=['GET'])
 def esp32_status():
     """Endpoint for ESP32 to get system status"""
@@ -808,7 +951,6 @@ def esp32_status():
         'timestamp': datetime.now().isoformat()
     })
 
-# Add this route for manual door control from ESP32
 @app.route('/esp32/control', methods=['POST'])
 def esp32_control():
     """Endpoint for ESP32 to control door manually"""
@@ -820,6 +962,14 @@ def esp32_control():
             face_api.door_locked = False
             # Auto-relock after 5 seconds
             threading.Timer(5.0, face_api.relock_door).start()
+            
+            # Emit door status update
+            socketio.emit('door_status', {
+                'locked': False,
+                'action': 'esp32_manual_unlock',
+                'timestamp': datetime.now().isoformat()
+            })
+            
             return jsonify({
                 'success': True,
                 'message': 'Door unlocked',
@@ -828,6 +978,14 @@ def esp32_control():
             
         elif command == 'CLOSE':
             face_api.door_locked = True
+            
+            # Emit door status update
+            socketio.emit('door_status', {
+                'locked': True,
+                'action': 'esp32_manual_lock',
+                'timestamp': datetime.now().isoformat()
+            })
+            
             return jsonify({
                 'success': True,
                 'message': 'Door locked',
@@ -853,8 +1011,156 @@ def esp32_control():
             'error': str(e)
         }), 500
 
+# Dashboard route
+@app.route('/dashboard')
+@app.route('/')
+def dashboard():
+    """Modern real-time dashboard for facial recognition system"""
+    dashboard_html = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Facial Recognition System - Real-time Dashboard</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        .dashboard-card {
+            backdrop-filter: blur(10px);
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 15px;
+            transition: all 0.3s ease;
+        }
+        
+        .dashboard-card:hover {
+            transform: translateY(-5px);
+            background: rgba(255, 255, 255, 0.15);
+        }
+        
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-online { background-color: #28a745; }
+        .status-offline { background-color: #dc3545; }
+        .status-warning { background-color: #ffc107; }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .video-container {
+            position: relative;
+            border-radius: 10px;
+            overflow: hidden;
+            background: #000;
+            min-height: 300px;
+        }
+        
+        .video-stream {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .alert-real-time {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1050;
+            min-width: 300px;
+            animation: slideInRight 0.5s ease;
+        }
+        
+        @keyframes slideInRight {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+        }
+        
+        .log-entry {
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-left: 4px solid;
+            transition: all 0.3s ease;
+        }
+        
+        .log-granted { border-left-color: #28a745; }
+        .log-denied { border-left-color: #dc3545; }
+        
+        .btn-glass {
+            backdrop-filter: blur(10px);
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-glass:hover {
+            background: rgba(255, 255, 255, 0.3);
+            color: white;
+            transform: translateY(-2px);
+        }
+        
+        .face-detection-alert {
+            animation: bounceIn 0.6s ease;
+        }
+        
+        @keyframes bounceIn {
+            0% { transform: scale(0.3); opacity: 0; }
+            50% { transform: scale(1.05); }
+            70% { transform: scale(0.9); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        
+        .stats-number {
+            font-size: 2.5rem;
+            font-weight: bold;
+            background: linear-gradient(45deg, #fff, #f0f0f0);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark" style="background: rgba(0,0,0,0.1);">
+        <div class="container">
+            <a class="navbar-brand" href="#"><i class="fas fa-shield-alt me-2"></i>Facial Recognition System</a>
+            <div class="d-flex align-items-center">
+                <span class="me-3"><span id="connection-status" class="status-indicator status-offline"></span><span id="connection-text">Connecting...</span></span>
+                <span class="badge bg-light text-dark" id="current-time"></span>
+            </div>
+        </div>
+    </nav>
 
-
+    <div class="container-fluid mt-4">
+        <!-- Real-time alerts container -->
+        <div id="alerts-container"></div>
+        
+        <!-- Status Overview Row -->
+        <div class="row mb-4">
+            <div class="col-lg-3 col-md-6 mb-3">
+                <div class="dashboard-card p-4 text-center text-white">
+                    <i class="fas fa-lock fa-2x mb-2"></i>
+                    <h5>Door Status</h5>
+                    <span id="door-status" class="badge bg-danger">
 @app.route('/dashboard')
 @app.route('/viewer2')  # Keep backward compatibility
 def dashboard():
