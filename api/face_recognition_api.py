@@ -239,11 +239,14 @@ class FacialRecognitionAPI:
                 box_color = (0, 255, 0)  # Green for recognized
                 text_color = (0, 255, 0)
                 status = "ACCESS GRANTED"
-                door
+                self.door_locked = False
+
             else:
                 box_color = (0, 0, 255)  # Red for unknown
                 text_color = (0, 0, 255)
                 status = "ACCESS DENIED"
+                self.door_locked = True
+
             
             # Draw main bounding box
             cv2.rectangle(frame, (x, y), (x + w, y + h), box_color, 3)
