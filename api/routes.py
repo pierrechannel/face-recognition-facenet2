@@ -255,3 +255,138 @@ def register_routes(app, face_api):
             }), 404
         
         face_api.stream_with_recognition = not face_api.stream_with_recognition
+        
+        return jsonify({
+            'success': True,
+            'message': f'Recognition {"enabled" if face_api.stream_with_recognition else "disabled"}',
+            'recognition_enabled': face_api.stream_with_recognition
+        })
+
+    # ESP32 specific endpoints
+    @app.route('/esp32/door-status', methods=['GET'])
+    def esp32_door_status():
+        """Endpoint for ESP32 to check door lock status"""
+        try:
+            return jsonify({
+                'door_locked': face_api.door_locked,
+                'unlock_available': face_api.is_unlock_window_valid(),
+                'last_recognition': face_api.last_recognition,
+                'timestamp': datetime.now().isoformat()
+            })
+        except Exception as e:
+            return jsonify({
+                'error': str(e),
+                'timestamp': datetime.now().isoformat()
+            }), 500
+            
+    @app.route('/esp32/simple-status', methods=['GET'])
+    def esp32_simple_status():
+        """Simplified status endpoint for ESP32"""
+        try:
+            current_time = time.time()
+            
+            # Check if access was recently granted and window is still valid
+            should_open = (
+                face_api.last_recognition and 
+                face_api.last_recognition.get('status') == 'GRANTED' and
+                current_time <= face_api.door_unlock_available_until and
+                not face_api.door_locked  # This condition prevents opening if door is already locked
+            )
+            
+            if should_open:
+                person_name = face_api.last_recognition.get('name', 'KNOWN')
+                
+                # Unlock the door (sets door_locked = False and handles timers)
+                face_api.door_locked = False
+                
+                # Clear the unlock window to prevent multiple opens
+                face_api.door_unlock_available_until = 0
+                
+                # Set up auto-relock timer (5 seconds) - cancel any existing timer first
+                if hasattr(face_api, '_esp32_relock_timer') and face_api._esp32_relock_timer:
+                    face_api._esp32_relock_timer.cancel()
+                
+                face_api._esp32_relock_timer = threading.Timer(5.0, face_api.relock_door)
+                face_api._esp32_relock_timer.start()
+                
+                app.logger.info(f"Door unlocked via ESP32 for {person_name}")
+                
+                response_data = {
+                    'open': 1,
+                    'message': 'ACCESS_GRANTED',
+                    'person': person_name,
+                    'door_locked': False
+                }
+            else:
+                response_data = {
+                    'open': 0,
+                    'message': 'WAITING',
+                    'door_locked': face_api.door_locked
+                }
+            
+            return jsonify(response_data)
+            
+        except Exception as e:
+            return jsonify({'open': 0, 'error': str(e)}), 500
+        
+    @app.route('/esp32/status', methods=['GET'])
+    def esp32_status():
+        """Endpoint for ESP32 to get system status"""
+        return jsonify({
+            'system_active': True,
+            'door_locked': face_api.door_locked,
+            'camera_active': face_api.is_running,
+            'known_faces': len(face_api.saved_embeddings),
+            'timestamp': datetime.now().isoformat()
+        })
+
+    @app.route('/esp32/control', methods=['POST'])
+    def esp32_control():
+        """Endpoint for ESP32 to control door manually"""
+        try:
+            data = request.get_json()
+            command = data.get('command', '').upper()
+            
+            if command == 'OPEN':
+                face_api.door_locked = False
+                # Auto-relock after 5 seconds
+                threading.Timer(5.0, face_api.relock_door).start()
+                return jsonify({
+                    'success': True,
+                    'message': 'Door unlocked',
+                    'door_locked': False
+                })
+                
+            elif command == 'CLOSE':
+                face_api.door_locked = True
+                return jsonify({
+                    'success': True,
+                    'message': 'Door locked',
+                    'door_locked': True
+                })
+                
+            elif command == 'STATUS':
+                return jsonify({
+                    'success': True,
+                    'door_locked': face_api.door_locked,
+                    'message': 'Door status retrieved'
+                })
+                
+            else:
+                return jsonify({
+                    'success': False,
+                    'message': f'Unknown command: {command}'
+                }), 400
+                
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': str(e)
+            }), 500
+
+    # Dashboard/Web Interface
+    @app.route('/dashboard')
+    @app.route('/viewer2')  # Keep backward compatibility
+    def dashboard():
+        """Modern Bootstrap-based dashboard for facial recognition system"""
+        return render_template('dashboard.html')
