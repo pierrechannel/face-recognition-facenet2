@@ -239,6 +239,7 @@ class FacialRecognitionAPI:
                 box_color = (0, 255, 0)  # Green for recognized
                 text_color = (0, 255, 0)
                 status = "ACCESS GRANTED"
+                door
             else:
                 box_color = (0, 0, 255)  # Red for unknown
                 text_color = (0, 0, 255)
