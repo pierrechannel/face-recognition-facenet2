@@ -56,7 +56,7 @@ if __name__ == '__main__':
     start_camera_automatically(face_api)
     
     # Run the Flask app
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 5001))
     debug = os.environ.get('DEBUG', 'False').lower() == 'true'
     
     logger.info(f"Starting Facial Recognition API on port {port}")
