@@ -116,12 +116,21 @@ class FacialRecognitionAPI:
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
                 cap.set(cv2.CAP_PROP_FPS, 30)
             
+            # Enable auto exposure and white balance for lighting adaptation
+            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # 1 = enable auto exposure
+            cap.set(cv2.CAP_PROP_AUTO_WB, 1)        # 1 = enable auto white balance
+            
+            # Additional properties for better lighting adaptation
+            cap.set(cv2.CAP_PROP_BRIGHTNESS, 0.5)   # Middle value for auto adjustment
+            cap.set(cv2.CAP_PROP_CONTRAST, 0.5)     # Middle value for auto adjustment
+            cap.set(cv2.CAP_PROP_SATURATION, 0.5)   # Middle value for auto adjustment
+            
             yield cap
             
         finally:
             if cap:
                 cap.release()
-    
+                
     def start_camera_stream(self, enable_recognition=False):
         """Start continuous camera streaming with optional recognition"""
         def stream():
