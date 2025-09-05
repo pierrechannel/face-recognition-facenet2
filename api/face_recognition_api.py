@@ -131,58 +131,7 @@ class FacialRecognitionAPI:
             if cap:
                 cap.release()
                 
-    def start_camera_stream(self, enable_recognition=False):
-        """Start continuous camera streaming with optional recognition"""
-        def stream():
-            try:
-                # Try different camera indices
-                for camera_id in [0, 1, 2]:
-                    try:
-                        with self.camera_context(camera_id) as cap:
-                            self.cap = cap
-                            self.stream_with_recognition = enable_recognition
-                            logger.info(f"Camera stream started on camera {camera_id} (recognition: {enable_recognition})")
-                            
-                            while self.is_running:
-                                ret, frame = cap.read()
-                                if ret:
-                                    # Update frame counter for FPS calculation
-                                    self.fps_counter += 1
-                                    current_time = time.time()
-                                    if current_time - self.fps_start_time >= 1.0:
-                                        self.fps_start_time = current_time
-                                        self.fps_counter = 0
-                                    
-                                    with self.frame_lock:
-                                        self.current_frame = frame.copy()
-                                        
-                                        # Process recognition if enabled
-                                        if self.stream_with_recognition:
-                                            self.annotated_frame = self.annotate_frame_with_recognition(frame.copy())
-                                        else:
-                                            self.annotated_frame = frame.copy()
-                                            
-                                time.sleep(0.033)  # ~30 FPS
-                            break
-                    except Exception as e:
-                        logger.warning(f"Failed to open camera {camera_id}: {e}")
-                        continue
-                else:
-                    logger.error("No cameras available")
-                    
-            except Exception as e:
-                logger.error(f"Camera stream error: {e}")
-            finally:
-                self.cap = None
-                with self.frame_lock:
-                    self.current_frame = None
-                    self.annotated_frame = None
-        
-        if not self.is_running:
-            self.is_running = True
-            self.stream_active = True
-            threading.Thread(target=stream, daemon=True).start()
-    
+
     def stop_camera_stream(self):
         """Stop camera streaming"""
         self.is_running = False
