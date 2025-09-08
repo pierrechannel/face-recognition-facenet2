@@ -93,151 +93,9 @@ class FacialRecognitionAPI:
                     embeddings[name] = embedding
         return embeddings
     
-    def analyze_lighting_conditions(self, frame):
-        """Analyze current lighting conditions of the frame"""
-        if frame is None:
-            return {'brightness': 0.5, 'contrast': 0.5, 'lighting_level': 'normal'}
-        
-        # Convert to grayscale for analysis
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # Calculate histogram
-        hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
-        
-        # Calculate lighting metrics
-        mean_brightness = np.mean(gray)
-        std_brightness = np.std(gray)
-        
-        # Analyze histogram distribution
-        dark_pixels = np.sum(hist[:85])    # Pixels in range 0-84 (dark)
-        mid_pixels = np.sum(hist[85:170])  # Pixels in range 85-169 (medium)
-        bright_pixels = np.sum(hist[170:]) # Pixels in range 170-255 (bright)
-        
-        total_pixels = gray.shape[0] * gray.shape[1]
-        dark_ratio = dark_pixels / total_pixels
-        bright_ratio = bright_pixels / total_pixels
-        
-        # Determine lighting conditions
-        if mean_brightness < 80 or dark_ratio > 0.6:
-            lighting_level = 'dark'
-        elif mean_brightness > 180 or bright_ratio > 0.4:
-            lighting_level = 'bright'
-        elif std_brightness < 30:
-            lighting_level = 'low_contrast'
-        else:
-            lighting_level = 'normal'
-        
-        return {
-            'brightness': mean_brightness / 255.0,
-            'contrast': std_brightness / 127.5,  # Normalized contrast
-            'lighting_level': lighting_level,
-            'dark_ratio': dark_ratio,
-            'bright_ratio': bright_ratio,
-            'std_brightness': std_brightness
-        }
-
-    def adjust_camera_settings(self, cap, lighting_conditions):
-        """Dynamically adjust camera settings based on lighting conditions"""
-        lighting_level = lighting_conditions['lighting_level']
-        brightness = lighting_conditions['brightness']
-        contrast = lighting_conditions['contrast']
-        
-        try:
-            if lighting_level == 'dark':
-                # Dark environment - increase exposure, brightness
-                if not self.is_raspberry_pi:
-                    cap.set(cv2.CAP_PROP_EXPOSURE, -1)  # Auto exposure
-                    cap.set(cv2.CAP_PROP_GAIN, 50)      # Increase gain
-                cap.set(cv2.CAP_PROP_BRIGHTNESS, min(0.8, brightness + 0.3))
-                cap.set(cv2.CAP_PROP_CONTRAST, min(1.0, contrast + 0.2))
-                cap.set(cv2.CAP_PROP_SATURATION, 0.6)   # Moderate saturation
-                
-            elif lighting_level == 'bright':
-                # Bright environment - reduce exposure, adjust for overexposure
-                if not self.is_raspberry_pi:
-                    cap.set(cv2.CAP_PROP_EXPOSURE, -8)  # Lower exposure
-                    cap.set(cv2.CAP_PROP_GAIN, 10)      # Reduce gain
-                cap.set(cv2.CAP_PROP_BRIGHTNESS, max(0.2, brightness - 0.2))
-                cap.set(cv2.CAP_PROP_CONTRAST, max(0.3, contrast - 0.1))
-                cap.set(cv2.CAP_PROP_SATURATION, 0.7)   # Higher saturation
-                
-            elif lighting_level == 'low_contrast':
-                # Low contrast - enhance contrast and saturation
-                cap.set(cv2.CAP_PROP_BRIGHTNESS, 0.5)
-                cap.set(cv2.CAP_PROP_CONTRAST, min(1.0, contrast + 0.3))
-                cap.set(cv2.CAP_PROP_SATURATION, 0.8)   # Higher saturation for low contrast
-                
-            else:  # normal lighting
-                # Normal lighting - balanced settings
-                cap.set(cv2.CAP_PROP_BRIGHTNESS, 0.5)
-                cap.set(cv2.CAP_PROP_CONTRAST, 0.6)
-                cap.set(cv2.CAP_PROP_SATURATION, 0.6)
-            
-            logger.info(f"Camera settings adjusted for {lighting_level} lighting")
-            
-        except Exception as e:
-            logger.warning(f"Could not adjust camera settings: {e}")
-
-    def enhance_frame_for_recognition(self, frame):
-        """Enhance frame based on lighting conditions for better recognition"""
-        if frame is None:
-            return frame
-        
-        # Analyze current lighting
-        lighting_conditions = self.analyze_lighting_conditions(frame)
-        lighting_level = lighting_conditions['lighting_level']
-        
-        enhanced_frame = frame.copy()
-        
-        try:
-            if lighting_level == 'dark':
-                # For dark conditions: increase brightness and contrast
-                enhanced_frame = cv2.convertScaleAbs(enhanced_frame, alpha=1.3, beta=30)
-                
-                # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
-                lab = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2LAB)
-                clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-                lab[:,:,0] = clahe.apply(lab[:,:,0])
-                enhanced_frame = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-                
-            elif lighting_level == 'bright':
-                # For bright conditions: reduce brightness, increase contrast
-                enhanced_frame = cv2.convertScaleAbs(enhanced_frame, alpha=1.1, beta=-20)
-                
-            elif lighting_level == 'low_contrast':
-                # For low contrast: apply histogram equalization
-                # Convert to YUV color space
-                yuv = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2YUV)
-                yuv[:,:,0] = cv2.equalizeHist(yuv[:,:,0])
-                enhanced_frame = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)
-                
-                # Increase saturation
-                hsv = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2HSV)
-                hsv[:,:,1] = cv2.multiply(hsv[:,:,1], 1.2)
-                enhanced_frame = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-            
-            # Apply gamma correction based on lighting
-            if lighting_conditions['brightness'] < 0.3:
-                # Dark image - apply gamma correction to brighten
-                gamma = 1.5
-                lookup_table = np.array([((i / 255.0) ** (1.0 / gamma)) * 255 for i in np.arange(0, 256)]).astype("uint8")
-                enhanced_frame = cv2.LUT(enhanced_frame, lookup_table)
-            elif lighting_conditions['brightness'] > 0.8:
-                # Bright image - apply gamma correction to darken
-                gamma = 0.7
-                lookup_table = np.array([((i / 255.0) ** (1.0 / gamma)) * 255 for i in np.arange(0, 256)]).astype("uint8")
-                enhanced_frame = cv2.LUT(enhanced_frame, lookup_table)
-            
-            return enhanced_frame
-            
-        except Exception as e:
-            logger.warning(f"Frame enhancement failed: {e}")
-            return frame
-
-    # CORRECTION 1: Update your camera_context method
     @contextmanager
     def camera_context(self, camera_id=0):
-        """Context manager for camera operations with dynamic lighting adaptation"""
+        """Context manager for camera operations"""
         cap = None
         try:
             if self.is_raspberry_pi:
@@ -248,7 +106,7 @@ class FacialRecognitionAPI:
             if not cap.isOpened():
                 raise Exception(f"Cannot open camera {camera_id}")
             
-            # Set initial camera properties
+            # Set camera properties
             if self.is_raspberry_pi:
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -258,35 +116,17 @@ class FacialRecognitionAPI:
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
                 cap.set(cv2.CAP_PROP_FPS, 30)
             
-            # Enable auto exposure and white balance
-            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
-            cap.set(cv2.CAP_PROP_AUTO_WB, 1)
-            
-            # Set initial balanced properties (these will be dynamically adjusted)
-            cap.set(cv2.CAP_PROP_BRIGHTNESS, 0.5)
-            cap.set(cv2.CAP_PROP_CONTRAST, 0.5)
-            cap.set(cv2.CAP_PROP_SATURATION, 0.6)
-            
-            # ADD: Warm-up period for camera settings
-            for _ in range(10):
-                ret, frame = cap.read()
-                if ret:
-                    # Analyze lighting and adjust settings during warm-up
-                    lighting_conditions = self.analyze_lighting_conditions(frame)
-                    self.adjust_camera_settings(cap, lighting_conditions)
-                    break
-            
             yield cap
             
         finally:
             if cap:
                 cap.release()
-
-    # CORRECTION 2: Update your start_camera_stream method
+    
     def start_camera_stream(self, enable_recognition=False):
-        """Start continuous camera streaming with adaptive lighting"""
+        """Start continuous camera streaming with optional recognition"""
         def stream():
             try:
+                # Try different camera indices
                 for camera_id in [0, 1, 2]:
                     try:
                         with self.camera_context(camera_id) as cap:
@@ -294,25 +134,10 @@ class FacialRecognitionAPI:
                             self.stream_with_recognition = enable_recognition
                             logger.info(f"Camera stream started on camera {camera_id} (recognition: {enable_recognition})")
                             
-                            # ADD: Lighting adjustment counter
-                            lighting_adjustment_counter = 0
-                            
                             while self.is_running:
                                 ret, frame = cap.read()
                                 if ret:
-                                    # UPDATE: Periodically adjust camera settings (every 30 frames)
-                                    lighting_adjustment_counter += 1
-                                    if lighting_adjustment_counter >= 30:
-                                        lighting_conditions = self.analyze_lighting_conditions(frame)
-                                        self.adjust_camera_settings(cap, lighting_conditions)
-                                        lighting_adjustment_counter = 0
-                                    
-                                    # UPDATE: Apply frame enhancement for recognition
-                                    if self.stream_with_recognition:
-                                        enhanced_frame = self.enhance_frame_for_recognition(frame)
-                                    else:
-                                        enhanced_frame = frame
-                                    
+                                    # Update frame counter for FPS calculation
                                     self.fps_counter += 1
                                     current_time = time.time()
                                     if current_time - self.fps_start_time >= 1.0:
@@ -320,13 +145,14 @@ class FacialRecognitionAPI:
                                         self.fps_counter = 0
                                     
                                     with self.frame_lock:
-                                        self.current_frame = enhanced_frame.copy()
+                                        self.current_frame = frame.copy()
                                         
+                                        # Process recognition if enabled
                                         if self.stream_with_recognition:
-                                            self.annotated_frame = self.annotate_frame_with_recognition(enhanced_frame.copy())
+                                            self.annotated_frame = self.annotate_frame_with_recognition(frame.copy())
                                         else:
-                                            self.annotated_frame = enhanced_frame.copy()
-                                
+                                            self.annotated_frame = frame.copy()
+                                            
                                 time.sleep(0.033)  # ~30 FPS
                             break
                     except Exception as e:
@@ -347,52 +173,7 @@ class FacialRecognitionAPI:
             self.is_running = True
             self.stream_active = True
             threading.Thread(target=stream, daemon=True).start()
-
-    # CORRECTION 3: Update your detect_and_recognize_faces method
-    def detect_and_recognize_faces(self, frame):
-        """Detect and recognize faces in a frame with lighting enhancement"""
-        if frame is None:
-            return []
-        
-        # ADD: Apply lighting enhancement before processing
-        enhanced_frame = self.enhance_frame_for_recognition(frame)
-        
-        # Resize frame for faster processing if needed
-        if self.is_raspberry_pi:
-            processing_frame = cv2.resize(enhanced_frame, (320, 240))
-            scale_x = enhanced_frame.shape[1] / processing_frame.shape[1]
-            scale_y = enhanced_frame.shape[0] / processing_frame.shape[0]
-        else:
-            processing_frame = enhanced_frame.copy()
-            scale_x = scale_y = 1.0
-        
-        gray = cv2.cvtColor(processing_frame, cv2.COLOR_BGR2GRAY)
-        
-        # ADD: Apply additional preprocessing for face detection
-        # Histogram equalization for better face detection in varying lighting
-        gray = cv2.equalizeHist(gray)
-        
-        faces = self.face_detector.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-        
-        results = []
-        for (x, y, w, h) in faces:
-            # Scale back to original frame size
-            x, y, w, h = int(x * scale_x), int(y * scale_y), int(w * scale_x), int(h * scale_y)
-            
-            # Use enhanced frame for recognition
-            name, distance = self.recognize_face(enhanced_frame, (x, y, w, h))
-            
-            results.append({
-                'bbox': [x, y, w, h],
-                'name': name,
-                'confidence': (1 - distance) * 100 if distance < 1.0 else 0,
-                'distance': distance,
-                'recognized': name != "UNKNOWN"
-            })
-        
-        return results   
-   
+    
     def stop_camera_stream(self):
         """Stop camera streaming"""
         self.is_running = False
@@ -408,7 +189,42 @@ class FacialRecognitionAPI:
                 return self.annotated_frame.copy()
             return self.current_frame.copy() if self.current_frame is not None else None
     
-
+    def detect_and_recognize_faces(self, frame):
+        """Detect and recognize faces in a frame"""
+        if frame is None:
+            return []
+        
+        # Resize frame for faster processing if needed
+        if self.is_raspberry_pi:
+            processing_frame = cv2.resize(frame, (320, 240))
+            scale_x = frame.shape[1] / processing_frame.shape[1]
+            scale_y = frame.shape[0] / processing_frame.shape[0]
+        else:
+            processing_frame = frame.copy()
+            scale_x = scale_y = 1.0
+        
+        gray = cv2.cvtColor(processing_frame, cv2.COLOR_BGR2GRAY)
+        faces = self.face_detector.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+        
+        results = []
+        for (x, y, w, h) in faces:
+            # Scale back to original frame size
+            x, y, w, h = int(x * scale_x), int(y * scale_y), int(w * scale_x), int(h * scale_y)
+            
+            # Recognize face
+            name, distance = self.recognize_face(frame, (x, y, w, h))
+            
+            results.append({
+                'bbox': [x, y, w, h],
+                'name': name,
+                'confidence': (1 - distance) * 100 if distance < 1.0 else 0,
+                'distance': distance,
+                'recognized': name != "UNKNOWN"
+            })
+        
+        return results
+    
     def annotate_frame_with_recognition(self, frame):
         """Annotate frame with face recognition results"""
         faces = self.detect_and_recognize_faces(frame)
