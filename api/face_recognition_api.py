@@ -1,4 +1,5 @@
 import os
+import math
 import cv2
 import torch
 import time
@@ -359,6 +360,10 @@ class FacialRecognitionAPI:
         try:
             x, y, w, h = box
             
+            # Debug: dimensions de la frame
+            print(f"Frame shape: {frame.shape}")
+            print(f"Bounding box: {x}, {y}, {w}, {h}")
+            
             # Ajouter une marge autour du visage
             margin = int(max(w, h) * 0.1)
             x_start = max(0, x - margin)
@@ -366,65 +371,122 @@ class FacialRecognitionAPI:
             x_end = min(frame.shape[1], x + w + margin)
             y_end = min(frame.shape[0], y + h + margin)
             
+            print(f"After margin - start: ({x_start}, {y_start}), end: ({x_end}, {y_end})")
+            
             face_img = frame[y_start:y_end, x_start:x_end]
             
             if face_img.size == 0:
+                print("ERROR: Face image is empty!")
                 return "UNKNOWN", 1.0
+            
+            print(f"Face image shape: {face_img.shape}")
             
             # Sur Raspberry Pi, améliorer la qualité de l'image
             if self.is_raspberry_pi and (face_img.shape[0] < 100 or face_img.shape[1] < 100):
                 face_img = cv2.resize(face_img, (160, 160), interpolation=cv2.INTER_CUBIC)
+                print(f"Resized face image shape: {face_img.shape}")
             
             # Amélioration de l'image
-            face_img = cv2.convertScaleAbs(face_img, alpha=1.1, beta=10)  # Contraste et luminosité
+            face_img = cv2.convertScaleAbs(face_img, alpha=1.1, beta=10)
             
             face_pil = Image.fromarray(cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB))
             face_tensor = preprocess_face(face_pil)
+            
+            print(f"Face tensor shape: {face_tensor.shape}")
+            print(f"Face tensor device before: {face_tensor.device}")
             
             # S'assurer que le tensor est sur le bon device
             if self.DEVICE == 'cuda' and torch.cuda.is_available():
                 face_tensor = face_tensor.to(self.DEVICE)
             else:
                 face_tensor = face_tensor.to('cpu')
+                
+            print(f"Face tensor device after: {face_tensor.device}")
             
             embedding = get_embedding(self.model, face_tensor, self.DEVICE)
-            print(f"Embedding généré: type={type(embedding)}, shape={getattr(embedding, 'shape', 'N/A')}")
+            print(f"Embedding généré: type={type(embedding)}")
+            
+            # Debug approfondi de l'embedding
+            if hasattr(embedding, 'shape'):
+                print(f"Embedding shape: {embedding.shape}")
+            if hasattr(embedding, 'dtype'):
+                print(f"Embedding dtype: {embedding.dtype}")
+            if hasattr(embedding, 'device'):
+                print(f"Embedding device: {embedding.device}")
+            
+            # Vérifier les valeurs concrètes
+            if hasattr(embedding, '__len__') and len(embedding) > 0:
+                print(f"Embedding first 5 values: {embedding[:5] if hasattr(embedding, '__getitem__') else 'N/A'}")
             
             # S'assurer que l'embedding est un tensor PyTorch
             if isinstance(embedding, np.ndarray):
                 embedding = torch.tensor(embedding, dtype=torch.float32)
+                print("Converted numpy array to tensor")
             
             # S'assurer que l'embedding est sur le bon device
             if self.DEVICE == 'cuda' and torch.cuda.is_available():
                 embedding = embedding.to(self.DEVICE)
             else:
                 embedding = embedding.to('cpu')
+                
+            print(f"Final embedding device: {embedding.device}")
             
             # Aplatir si nécessaire
             if len(embedding.shape) > 1:
                 embedding = embedding.flatten()
+                print(f"Flattened embedding shape: {embedding.shape}")
                 
+            # Vérifier les NaN avant normalisation
+            if torch.isnan(embedding).any():
+                print("CRITICAL: NaN detected in embedding before normalization!")
+                nan_indices = torch.isnan(embedding).nonzero()
+                print(f"NaN indices: {nan_indices}")
+                return "ERROR", 1.0
+            
             # Normaliser l'embedding généré
             embedding = torch.nn.functional.normalize(embedding.unsqueeze(0), p=2, dim=1).squeeze(0)
+            print(f"After normalization shape: {embedding.shape}")
+            
+            # Vérifier les NaN après normalisation
+            if torch.isnan(embedding).any():
+                print("CRITICAL: NaN detected in embedding after normalization!")
+                return "ERROR", 1.0
             
             # Calculer les distances avec tous les embeddings sauvegardés
             distances = {}
             for name, saved_embedding in self.saved_embeddings.items():
-                # Utiliser la distance cosine au lieu de euclidienne
+                print(f"\nComparing with {name}:")
+                print(f"Saved embedding shape: {saved_embedding.shape}")
+                print(f"Saved embedding device: {saved_embedding.device}")
+                
+                # Vérifier les NaN dans l'embedding sauvegardé
+                if torch.isnan(saved_embedding).any():
+                    print(f"CRITICAL: NaN in saved embedding {name}!")
+                    continue
+                    
+                # S'assurer que les devices sont compatibles
+                if embedding.device != saved_embedding.device:
+                    saved_embedding = saved_embedding.to(embedding.device)
+                    print(f"Moved saved embedding to device: {saved_embedding.device}")
+                
                 distance = self.cosine_distance(embedding, saved_embedding)
                 distances[name] = distance
-                print(f"Distance avec {name}: {distance:.4f}")
+                print(f"Distance avec {name}: {distance}")
+                
+                # Debug de la distance
+                if math.isnan(distance):
+                    print(f"NaN distance calculated for {name}!")
             
             if distances:
                 best_match = min(distances, key=distances.get)
                 best_distance = distances[best_match]
                 
-                print(f"Meilleure correspondance: {best_match} avec distance {best_distance:.4f} (seuil: {self.THRESHOLD})")
+                print(f"Meilleure correspondance: {best_match} avec distance {best_distance} (seuil: {self.THRESHOLD})")
                 
                 if best_distance < self.THRESHOLD:
                     return best_match, best_distance
                 else:
-                    print(f"Distance {best_distance:.4f} > seuil {self.THRESHOLD}, marqué comme UNKNOWN")
+                    print(f"Distance {best_distance} > seuil {self.THRESHOLD}, marqué comme UNKNOWN")
             
             return "UNKNOWN", 1.0
             
@@ -434,7 +496,6 @@ class FacialRecognitionAPI:
             import traceback
             traceback.print_exc()
             return "ERROR", 1.0
-    
     def euclidean_distance(self, t1, t2):
         """Calculate Euclidean distance between two tensors"""
         if isinstance(t1, np.ndarray):
