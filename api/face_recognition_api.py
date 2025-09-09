@@ -381,37 +381,34 @@ class FacialRecognitionAPI:
             face_pil = Image.fromarray(cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB))
             face_tensor = preprocess_face(face_pil)
             
-            # S'assurer que le tensor est sur le bon device
-            if self.DEVICE == 'cuda' and torch.cuda.is_available():
-                face_tensor = face_tensor.to(self.DEVICE)
-            else:
-                face_tensor = face_tensor.to('cpu')
+            # DEBUG: Print input tensor info
+            print(f"Input tensor - shape: {face_tensor.shape}, range: [{face_tensor.min():.3f}, {face_tensor.max():.3f}]")
             
+            # Get embedding - ensure model is on correct device
             embedding = get_embedding(self.model, face_tensor, self.DEVICE)
-            print(f"Embedding généré: type={type(embedding)}, shape={getattr(embedding, 'shape', 'N/A')}")
             
-            # S'assurer que l'embedding est un tensor PyTorch
-            if isinstance(embedding, np.ndarray):
-                embedding = torch.tensor(embedding, dtype=torch.float32)
+            # DEBUG: Print embedding info
+            print(f"Raw embedding - type: {type(embedding)}, shape: {embedding.shape}")
+            print(f"Embedding range: [{embedding.min():.6f}, {embedding.max():.6f}]")
+            print(f"Embedding contains NaN: {np.any(np.isnan(embedding))}")
             
-            # S'assurer que l'embedding est sur le bon device
-            if self.DEVICE == 'cuda' and torch.cuda.is_available():
-                embedding = embedding.to(self.DEVICE)
-            else:
-                embedding = embedding.to('cpu')
+            # If embedding contains NaN, return unknown
+            if np.any(np.isnan(embedding)):
+                print("WARNING: Embedding contains NaN values!")
+                return "UNKNOWN", 1.0
             
-            # Aplatir si nécessaire
-            if len(embedding.shape) > 1:
-                embedding = embedding.flatten()
-                
-            # Normaliser l'embedding généré
-            embedding = torch.nn.functional.normalize(embedding.unsqueeze(0), p=2, dim=1).squeeze(0)
+            # Convert to tensor and normalize
+            embedding_tensor = torch.tensor(embedding, dtype=torch.float32, device=self.DEVICE)
+            embedding_tensor = torch.nn.functional.normalize(embedding_tensor.unsqueeze(0), p=2, dim=1).squeeze(0)
             
             # Calculer les distances avec tous les embeddings sauvegardés
             distances = {}
             for name, saved_embedding in self.saved_embeddings.items():
-                # Utiliser la distance cosine au lieu de euclidienne
-                distance = self.cosine_distance(embedding, saved_embedding)
+                # Ensure saved embedding is on the same device
+                saved_embedding = saved_embedding.to(self.DEVICE)
+                
+                # Use cosine distance
+                distance = self.cosine_distance(embedding_tensor, saved_embedding)
                 distances[name] = distance
                 print(f"Distance avec {name}: {distance:.4f}")
             
@@ -434,7 +431,7 @@ class FacialRecognitionAPI:
             import traceback
             traceback.print_exc()
             return "ERROR", 1.0
-    
+        
     def euclidean_distance(self, t1, t2):
         """Calculate Euclidean distance between two tensors"""
         if isinstance(t1, np.ndarray):
@@ -445,14 +442,21 @@ class FacialRecognitionAPI:
     
     def cosine_distance(self, t1, t2):
         """Calculate cosine distance between two tensors"""
-        if isinstance(t1, np.ndarray):
-            t1 = torch.tensor(t1, dtype=torch.float32)
-        if isinstance(t2, np.ndarray):
-            t2 = torch.tensor(t2, dtype=torch.float32)
+        # Ensure both tensors are on the same device
+        t2 = t2.to(t1.device)
         
-        # Calculer la similarité cosine puis convertir en distance
+        # Calculate cosine similarity
         cosine_similarity = torch.nn.functional.cosine_similarity(t1.unsqueeze(0), t2.unsqueeze(0))
-        return (1 - cosine_similarity).item()
+        
+        # Convert to distance (0 = identical, 2 = completely different)
+        cosine_distance = (1 - cosine_similarity).item()
+        
+        # Handle NaN values
+        if np.isnan(cosine_distance):
+            print(f"WARNING: Cosine distance is NaN! t1: {t1.shape}, t2: {t2.shape}")
+            return 1.0  # Return maximum distance
+        
+        return cosine_distance
     
     def process_access_request(self, recognized_faces):
         """Process access request based on recognized faces"""

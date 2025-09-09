@@ -21,5 +21,25 @@ def preprocess_face(image):
     return transform(image).unsqueeze(0)  # batch of 1
 
 def get_embedding(model, image_tensor, device='cpu'):
+    model = model.to(device)
+    model.eval()
+    
+    print(f"Input tensor shape: {image_tensor.shape}")
+    print(f"Input tensor range: [{image_tensor.min():.3f}, {image_tensor.max():.3f}]")
+    
     with torch.no_grad():
-        return model(image_tensor.to(device)).cpu().numpy()[0]
+        output = model(image_tensor.to(device))
+        print(f"Model output type: {type(output)}")
+        
+        # Handle different output formats
+        if isinstance(output, tuple):
+            print(f"Model output is tuple, length: {len(output)}")
+            output = output[0]  # Take first element
+        
+        print(f"Final output shape: {output.shape}")
+        print(f"Final output range: [{output.min():.6f}, {output.max():.6f}]")
+        print(f"Contains NaN: {torch.any(torch.isnan(output))}")
+        
+        embedding = output.cpu().numpy()[0]
+        print(f"Final embedding shape: {embedding.shape}")
+        return embedding
