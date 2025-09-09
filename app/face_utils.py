@@ -65,6 +65,26 @@ def preprocess_face(image):
         return tensor.unsqueeze(0)
 
 
+def safe_tensor_stats(tensor, name="tensor"):
+    """Calcul sécurisé des statistiques d'un tensor"""
+    try:
+        if tensor.numel() == 0:
+            return f"{name}: empty tensor"
+        
+        # Vérifier et corriger les NaN/Inf
+        if torch.isnan(tensor).any() or torch.isinf(tensor).any():
+            tensor = torch.nan_to_num(tensor, nan=0.0, posinf=1.0, neginf=-1.0)
+        
+        min_val = tensor.min().item()
+        max_val = tensor.max().item()
+        mean_val = tensor.mean().item()
+        
+        return f"{name}: min={min_val:.6f}, max={max_val:.6f}, mean={mean_val:.6f}"
+    
+    except Exception as e:
+        return f"{name}: error calculating stats - {e}"
+
+
 def get_embedding(model, image_tensor, device='cpu'):
     """Obtenir l'embedding d'une image de visage"""
     try:
@@ -84,6 +104,9 @@ def get_embedding(model, image_tensor, device='cpu'):
             
             print(f"Tensor sur device: {image_tensor.device}, Model sur device: {next(model.parameters()).device}")
             
+            # Vérifier l'input avant inférence
+            print(safe_tensor_stats(image_tensor, "Input tensor"))
+            
             # Inférence
             try:
                 output = model(image_tensor)
@@ -91,26 +114,23 @@ def get_embedding(model, image_tensor, device='cpu'):
                 
                 # Vérifier si l'output contient des NaN directement du modèle
                 if isinstance(output, torch.Tensor):
-                    if torch.isnan(output).any():
-                        print("ERREUR CRITIQUE: Le modèle génère des NaN directement!")
-                        print(f"NaN count: {torch.isnan(output).sum()}")
-                        print(f"Output stats: min={torch.nanmin(output)}, max={torch.nanmax(output)}")
+                    # Vérifier et corriger les NaN/Inf
+                    if torch.isnan(output).any() or torch.isinf(output).any():
+                        print("ATTENTION: Le modèle génère des NaN/Inf valeurs!")
+                        nan_count = torch.isnan(output).sum().item()
+                        inf_count = torch.isinf(output).sum().item()
+                        print(f"NaN count: {nan_count}, Inf count: {inf_count}")
                         
-                        # Essayer de diagnostiquer le problème
-                        print("Diagnostic du tensor d'entrée:")
-                        print(f"  Input stats: min={image_tensor.min()}, max={image_tensor.max()}, mean={image_tensor.mean()}")
-                        print(f"  Input NaN: {torch.isnan(image_tensor).any()}")
-                        print(f"  Input Inf: {torch.isinf(image_tensor).any()}")
-                        
-                        # Retourner un embedding aléatoire normalisé comme fallback
-                        print("Utilisation d'un embedding de fallback")
-                        fallback_embedding = torch.randn(512, dtype=torch.float32)
-                        fallback_embedding = fallback_embedding / torch.norm(fallback_embedding)
-                        return fallback_embedding.numpy()
+                        # Corriger les valeurs problématiques
+                        output = torch.nan_to_num(output, nan=0.0, posinf=1.0, neginf=-1.0)
                     
-                    if torch.isinf(output).any():
-                        print("ATTENTION: Le modèle génère des valeurs infinies!")
-                        output = torch.nan_to_num(output, posinf=1.0, neginf=-1.0)
+                    # Calcul sécurisé des statistiques
+                    if output.numel() > 0:
+                        output_min = output.min().item()
+                        output_max = output.max().item()
+                        print(f"Output stats: min={output_min:.6f}, max={output_max:.6f}")
+                    else:
+                        print("Output vide!")
                 
                 # Conversion sécurisée en numpy
                 if isinstance(output, torch.Tensor):
@@ -118,9 +138,9 @@ def get_embedding(model, image_tensor, device='cpu'):
                     output_cpu = output.cpu()
                     
                     # Vérifier encore une fois avant conversion numpy
-                    if torch.isnan(output_cpu).any():
-                        print("NaN détectés avant conversion numpy!")
-                        output_cpu = torch.nan_to_num(output_cpu)
+                    if torch.isnan(output_cpu).any() or torch.isinf(output_cpu).any():
+                        print("NaN/Inf détectés avant conversion numpy, correction...")
+                        output_cpu = torch.nan_to_num(output_cpu, nan=0.0, posinf=1.0, neginf=-1.0)
                     
                     # Conversion en numpy
                     numpy_output = output_cpu.numpy()
@@ -129,14 +149,23 @@ def get_embedding(model, image_tensor, device='cpu'):
                     if len(numpy_output.shape) > 1 and numpy_output.shape[0] == 1:
                         numpy_output = numpy_output[0]
                     
+                    # Validation finale
+                    if np.isnan(numpy_output).any() or np.isinf(numpy_output).any():
+                        print("Correction des NaN/Inf dans l'embedding final")
+                        numpy_output = np.nan_to_num(numpy_output, nan=0.0, posinf=1.0, neginf=-1.0)
+                    
                     print(f"Embedding final: shape={numpy_output.shape}, type={type(numpy_output)}")
-                    print(f"Embedding stats: min={np.nanmin(numpy_output):.6f}, max={np.nanmax(numpy_output):.6f}, mean={np.nanmean(numpy_output):.6f}")
-                    print(f"NaN count in final embedding: {np.isnan(numpy_output).sum()}")
+                    print(f"Embedding stats: min={np.min(numpy_output):.6f}, max={np.max(numpy_output):.6f}, mean={np.mean(numpy_output):.6f}")
+                    print(f"NaN count: {np.isnan(numpy_output).sum()}, Inf count: {np.isinf(numpy_output).sum()}")
                     
                     return numpy_output
                 else:
                     print(f"Output n'est pas un tensor: {type(output)}")
-                    return np.array(output)
+                    # Convertir en numpy array
+                    numpy_output = np.array(output)
+                    if len(numpy_output.shape) > 1:
+                        numpy_output = numpy_output[0]
+                    return numpy_output
                     
             except RuntimeError as e:
                 print(f"Erreur RuntimeError dans l'inférence: {e}")
@@ -209,10 +238,11 @@ def debug_model_inference(model, image_tensor, device='cpu'):
             if torch.isnan(real_output).any():
                 print("Analyse des paramètres du modèle:")
                 for name, param in model.named_parameters():
-                    if torch.isnan(param).any():
-                        print(f"  Paramètre {name} contient des NaN!")
-                    if torch.isinf(param).any():
-                        print(f"  Paramètre {name} contient des valeurs infinies!")
+                    if param.numel() > 0:
+                        if torch.isnan(param).any():
+                            print(f"  Paramètre {name} contient des NaN!")
+                        if torch.isinf(param).any():
+                            print(f"  Paramètre {name} contient des valeurs infinies!")
         
     except Exception as e:
         print(f"Erreur dans debug_model_inference: {e}")
