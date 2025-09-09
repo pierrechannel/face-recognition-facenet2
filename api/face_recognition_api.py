@@ -13,7 +13,7 @@ import logging
 from contextlib import contextmanager
 
 from app.model import load_facenet_model
-from app.face_utils import preprocess_face, get_embedding
+from app.face_utils import preprocess_face, get_embedding, resize_image
 from app.db import load_embedding
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,22 @@ class FacialRecognitionAPI:
         # Platform detection
         self.is_raspberry_pi = platform.machine() in ('armv7l', 'armv6l', 'aarch64')
         
+        # Raspberry Pi specific optimizations
+        if self.is_raspberry_pi:
+            logger.info("Raspberry Pi detected - applying optimizations")
+            # Use smaller frame size for RPi
+            self.FRAME_WIDTH = 320
+            self.FRAME_HEIGHT = 240
+            self.FPS = 10
+            # Adjust threshold for potentially lower quality camera
+            self.THRESHOLD = 0.75
+            # Limit torch threads
+            torch.set_num_threads(1)
+        else:
+            self.FRAME_WIDTH = 640
+            self.FRAME_HEIGHT = 480
+            self.FPS = 15
+        
         # State variables
         self.cap = None
         self.model = None
@@ -40,7 +56,7 @@ class FacialRecognitionAPI:
         self.is_running = False
         self.door_locked = True
         self.last_recognition = None
-        self.detection_history = deque(maxlen=100)
+        self.detection_history = deque(maxlen=50)  # Reduced for RPi
         self.current_frame = None
         self.frame_lock = threading.Lock()
         self.annotated_frame = None
@@ -48,6 +64,8 @@ class FacialRecognitionAPI:
         self.stream_with_recognition = False
         self.fps_counter = 0
         self.fps_start_time = time.time()
+        self.last_processing_time = 0
+        self.processing_interval = 0.5  # Process frames less frequently on RPi
         
         # Create directories
         os.makedirs(self.CAPTURE_DIR, exist_ok=True)
@@ -65,8 +83,28 @@ class FacialRecognitionAPI:
             self.saved_embeddings = self.get_all_saved_embeddings()
             
             logger.info("Loading face detector...")
-            self.face_detector = cv2.CascadeClassifier(
-                cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+            # Use more efficient face detector for Raspberry Pi
+            if self.is_raspberry_pi:
+                # Try to load a more efficient detector
+                try:
+                    # Try to use OpenCV's DNN face detector if available
+                    proto_path = "deploy.prototxt"
+                    model_path = "res10_300x300_ssd_iter_140000.caffemodel"
+                    if os.path.exists(proto_path) and os.path.exists(model_path):
+                        self.face_detector = cv2.dnn.readNetFromCaffe(proto_path, model_path)
+                        logger.info("Using DNN face detector")
+                    else:
+                        # Fall back to Haar cascade
+                        self.face_detector = cv2.CascadeClassifier(
+                            cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+                        logger.info("Using Haar cascade face detector")
+                except:
+                    self.face_detector = cv2.CascadeClassifier(
+                        cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+                    logger.info("Using Haar cascade face detector (fallback)")
+            else:
+                self.face_detector = cv2.CascadeClassifier(
+                    cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
             
             logger.info(f"System ready - {len(self.saved_embeddings)} known faces loaded")
             
@@ -75,11 +113,26 @@ class FacialRecognitionAPI:
             raise
     
     def load_model(self, path):
-        """Load the facial recognition model"""
+        """Load the facial recognition model with optimizations"""
         model = load_facenet_model()
         model.load_state_dict(torch.load(path, map_location=self.DEVICE))
-        model.to(self.DEVICE)
-        model.eval()
+        
+        # Apply Raspberry Pi optimizations
+        if self.is_raspberry_pi:
+            # Use float32 instead of half precision for better CPU compatibility
+            model.float()
+            # Set to evaluation mode
+            model.eval()
+            # Try to use torchscript if available
+            try:
+                model = torch.jit.script(model)
+                logger.info("Model compiled with TorchScript")
+            except Exception as e:
+                logger.warning(f"TorchScript compilation failed: {e}")
+        else:
+            model.to(self.DEVICE)
+            model.eval()
+            
         return model
     
     def get_all_saved_embeddings(self):
@@ -99,6 +152,7 @@ class FacialRecognitionAPI:
         cap = None
         try:
             if self.is_raspberry_pi:
+                # Use different backend for Raspberry Pi
                 cap = cv2.VideoCapture(camera_id)
             else:
                 cap = cv2.VideoCapture(camera_id, cv2.CAP_DSHOW)
@@ -106,15 +160,15 @@ class FacialRecognitionAPI:
             if not cap.isOpened():
                 raise Exception(f"Cannot open camera {camera_id}")
             
-            # Set camera properties
+            # Set camera properties based on platform
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.FRAME_WIDTH)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.FRAME_HEIGHT)
+            cap.set(cv2.CAP_PROP_FPS, self.FPS)
+            
+            # Additional Raspberry Pi camera optimizations
             if self.is_raspberry_pi:
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                cap.set(cv2.CAP_PROP_FPS, 15)
-            else:
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-                cap.set(cv2.CAP_PROP_FPS, 30)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer size
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))  # Better compression
             
             yield cap
             
@@ -141,19 +195,26 @@ class FacialRecognitionAPI:
                                     self.fps_counter += 1
                                     current_time = time.time()
                                     if current_time - self.fps_start_time >= 1.0:
-                                        self.fps_start_time = current_time
+                                        logger.debug(f"FPS: {self.fps_counter}")
                                         self.fps_counter = 0
+                                        self.fps_start_time = current_time
                                     
                                     with self.frame_lock:
                                         self.current_frame = frame.copy()
                                         
-                                        # Process recognition if enabled
+                                        # Process recognition if enabled, but less frequently on RPi
                                         if self.stream_with_recognition:
-                                            self.annotated_frame = self.annotate_frame_with_recognition(frame.copy())
+                                            current_time = time.time()
+                                            if current_time - self.last_processing_time >= self.processing_interval:
+                                                self.annotated_frame = self.annotate_frame_with_recognition(frame.copy())
+                                                self.last_processing_time = current_time
+                                            elif self.annotated_frame is not None:
+                                                # Reuse the last annotated frame if not time to process yet
+                                                pass
                                         else:
                                             self.annotated_frame = frame.copy()
                                             
-                                time.sleep(0.033)  # ~30 FPS
+                                time.sleep(0.1 if self.is_raspberry_pi else 0.033)  # Adjust for RPi
                             break
                     except Exception as e:
                         logger.warning(f"Failed to open camera {camera_id}: {e}")
@@ -190,22 +251,42 @@ class FacialRecognitionAPI:
             return self.current_frame.copy() if self.current_frame is not None else None
     
     def detect_and_recognize_faces(self, frame):
-        """Detect and recognize faces in a frame"""
+        """Detect and recognize faces in a frame with RPi optimizations"""
         if frame is None:
             return []
         
-        # Resize frame for faster processing if needed
-        if self.is_raspberry_pi:
-            processing_frame = cv2.resize(frame, (320, 240))
-            scale_x = frame.shape[1] / processing_frame.shape[1]
-            scale_y = frame.shape[0] / processing_frame.shape[0]
-        else:
-            processing_frame = frame.copy()
-            scale_x = scale_y = 1.0
+        # Resize frame for faster processing on RPi
+        processing_frame = resize_image(frame, max_size=320 if self.is_raspberry_pi else 640)
+        scale_x = frame.shape[1] / processing_frame.shape[1]
+        scale_y = frame.shape[0] / processing_frame.shape[0]
         
-        gray = cv2.cvtColor(processing_frame, cv2.COLOR_BGR2GRAY)
-        faces = self.face_detector.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+        # Use appropriate face detection method
+        if isinstance(self.face_detector, cv2.dnn_Net):
+            # DNN-based face detection
+            blob = cv2.dnn.blobFromImage(
+                processing_frame, 1.0, (300, 300), [104, 117, 123], False, False)
+            self.face_detector.setInput(blob)
+            detections = self.face_detector.forward()
+            
+            faces = []
+            for i in range(detections.shape[2]):
+                confidence = detections[0, 0, i, 2]
+                if confidence > 0.5:  # Confidence threshold
+                    x1 = int(detections[0, 0, i, 3] * processing_frame.shape[1])
+                    y1 = int(detections[0, 0, i, 4] * processing_frame.shape[0])
+                    x2 = int(detections[0, 0, i, 5] * processing_frame.shape[1])
+                    y2 = int(detections[0, 0, i, 6] * processing_frame.shape[0])
+                    w = x2 - x1
+                    h = y2 - y1
+                    faces.append((x1, y1, w, h))
+        else:
+            # Haar cascade face detection
+            gray = cv2.cvtColor(processing_frame, cv2.COLOR_BGR2GRAY)
+            # Use more aggressive scaling on RPi for speed
+            scale_factor = 1.05 if self.is_raspberry_pi else 1.1
+            min_neighbors = 3 if self.is_raspberry_pi else 5
+            faces = self.face_detector.detectMultiScale(
+                gray, scaleFactor=scale_factor, minNeighbors=min_neighbors, minSize=(30, 30))
         
         results = []
         for (x, y, w, h) in faces:
@@ -226,7 +307,7 @@ class FacialRecognitionAPI:
         return results
     
     def annotate_frame_with_recognition(self, frame):
-        """Annotate frame with face recognition results"""
+        """Annotate frame with face recognition results - optimized for RPi"""
         faces = self.detect_and_recognize_faces(frame)
         
         for face in faces:
@@ -240,68 +321,40 @@ class FacialRecognitionAPI:
                 text_color = (0, 255, 0)
                 status = "ACCESS GRANTED"
                 self.door_locked = False
-
             else:
                 box_color = (0, 0, 255)  # Red for unknown
                 text_color = (0, 0, 255)
                 status = "ACCESS DENIED"
                 self.door_locked = True
-
             
-            # Draw main bounding box
-            cv2.rectangle(frame, (x, y), (x + w, y + h), box_color, 3)
+            # Draw main bounding box (simpler for RPi)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), box_color, 2)
             
-            # Draw corner accents
-            corner_length = 20
-            cv2.line(frame, (x, y), (x + corner_length, y), box_color, 5)
-            cv2.line(frame, (x, y), (x, y + corner_length), box_color, 5)
-            cv2.line(frame, (x + w, y), (x + w - corner_length, y), box_color, 5)
-            cv2.line(frame, (x + w, y), (x + w, y + corner_length), box_color, 5)
-            cv2.line(frame, (x, y + h), (x + corner_length, y + h), box_color, 5)
-            cv2.line(frame, (x, y + h), (x, y + h - corner_length), box_color, 5)
-            cv2.line(frame, (x + w, y + h), (x + w - corner_length, y + h), box_color, 5)
-            cv2.line(frame, (x + w, y + h), (x + w, y + h - corner_length), box_color, 5)
-            
-            # Create info panel
+            # Draw label background
             label = f"{name}"
-            confidence_text = f"Confidence: {confidence:.1f}%"
-            
-            # Calculate text area size
-            panel_width = max(300, len(status) * 12)
-            panel_height = 90
-            
-            # Background for text
-            cv2.rectangle(frame, (x, y - panel_height), (x + panel_width, y), (0, 0, 0), -1)
-            cv2.rectangle(frame, (x, y - panel_height), (x + panel_width, y), box_color, 2)
+            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+            cv2.rectangle(frame, (x, y - label_size[1] - 10), (x + label_size[0] + 10, y), box_color, -1)
             
             # Draw text
-            cv2.putText(frame, status, (x + 5, y - 65), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
-            cv2.putText(frame, label, (x + 5, y - 40), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.putText(frame, confidence_text, (x + 5, y - 15), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(frame, label, (x + 5, y - 5), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
         
-        # Add system info overlay
+        # Add simplified system info overlay for RPi
         overlay_text = [
             f"Door: {'LOCKED' if self.door_locked else 'UNLOCKED'}",
             f"Faces: {len(faces)}",
-            f"Known: {len(self.saved_embeddings)}",
             f"Time: {datetime.now().strftime('%H:%M:%S')}"
         ]
         
         # Background for system info
-        cv2.rectangle(frame, (10, 10), (300, 120), (0, 0, 0), -1)
-        cv2.rectangle(frame, (10, 10), (300, 120), (100, 100, 100), 2)
-        
         for i, text in enumerate(overlay_text):
-            cv2.putText(frame, text, (20, 35 + i * 25), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            cv2.putText(frame, text, (10, 20 + i * 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         return frame
     
     def recognize_face(self, frame, box):
-        """Recognize a face in the given bounding box"""
+        """Recognize a face in the given bounding box with RPi optimizations"""
         try:
             x, y, w, h = box
             face_img = frame[y:y+h, x:x+w]
@@ -309,10 +362,18 @@ class FacialRecognitionAPI:
             if face_img.size == 0:
                 return "UNKNOWN", 1.0
             
+            # Convert to PIL and preprocess
             face_pil = Image.fromarray(cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB))
             face_tensor = preprocess_face(face_pil)
+            
+            if face_tensor is None:
+                return "UNKNOWN", 1.0
+                
             embedding = get_embedding(self.model, face_tensor, self.DEVICE)
             
+            if embedding is None:
+                return "UNKNOWN", 1.0
+                
             distances = {name: self.euclidean_distance(embedding, emb)
                         for name, emb in self.saved_embeddings.items()}
             
@@ -435,25 +496,28 @@ class FacialRecognitionAPI:
             f.write(f"[{timestamp}] {name} - {status} - {confidence}\n")
     
     def frame_to_base64(self, frame):
-        """Convert frame to base64 string"""
-        _, buffer = cv2.imencode('.jpg', frame)
+        """Convert frame to base64 string with lower quality for RPi"""
+        quality = 50 if self.is_raspberry_pi else 80
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
         img_str = base64.b64encode(buffer).decode('utf-8')
         return img_str
     
     def generate_video_stream(self, annotated=False):
-        """Generate video stream for HTTP streaming"""
+        """Generate video stream for HTTP streaming - optimized for RPi"""
         while self.stream_active:
             frame = self.get_current_frame(annotated=annotated)
             if frame is not None:
-                # Encode frame as JPEG
-                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                # Lower quality encoding for RPi
+                quality = 50 if self.is_raspberry_pi else 85
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
                 frame_bytes = buffer.tobytes()
                 
                 # Yield frame in multipart format
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
             
-            time.sleep(0.033)  # ~30 FPS
+            # Longer sleep interval for RPi to reduce CPU load
+            time.sleep(0.1 if self.is_raspberry_pi else 0.033)
     
     def start_relock_countdown(self):
         """Start the relock countdown (called after initial delay)"""

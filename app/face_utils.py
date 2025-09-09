@@ -3,6 +3,7 @@ import torch
 import cv2
 import numpy as np
 from torchvision import transforms
+from PIL import Image
 import logging
 
 # Set up logging
@@ -41,9 +42,10 @@ def read_image_from_bytes(file_bytes):
 def preprocess_face(image):
     """
     Preprocess face image for model input.
+    Accepts either PIL Image or numpy array.
     
     Args:
-        image: RGB image as numpy array
+        image: PIL Image or numpy array
         
     Returns:
         Preprocessed tensor ready for model input
@@ -53,10 +55,16 @@ def preprocess_face(image):
         return None
     
     try:
-        # Convert numpy array to PIL Image for transformation
-        from PIL import Image
-        pil_image = Image.fromarray(image)
-        return transform(pil_image).unsqueeze(0)  # Add batch dimension
+        # Convert numpy array to PIL Image if needed
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        
+        # Ensure it's a PIL Image
+        if not isinstance(image, Image.Image):
+            logger.error(f"Expected PIL Image or numpy array, got {type(image)}")
+            return None
+            
+        return transform(image).unsqueeze(0)  # Add batch dimension
     except Exception as e:
         logger.error(f"Error preprocessing face: {e}")
         return None
@@ -95,3 +103,56 @@ def get_embedding(model, image_tensor, device='cpu'):
         logger.error(f"Error generating embedding: {e}")
         return None
 
+# Additional utility functions for Raspberry Pi optimization
+def optimize_model_for_rpi(model):
+    """
+    Optimize model for Raspberry Pi deployment.
+    
+    Args:
+        model: PyTorch model to optimize
+        
+    Returns:
+        Optimized model
+    """
+    try:
+        # Use half precision for faster inference and less memory
+        if torch.cuda.is_available():
+            model.half()  # Convert to half precision
+        else:
+            # On CPU, use more efficient settings
+            model.float()
+            torch.set_num_threads(2)  # Limit threads for Raspberry Pi
+        
+        # Use JIT compilation if possible
+        try:
+            model = torch.jit.script(model)
+            logger.info("Model compiled with TorchScript")
+        except Exception as e:
+            logger.warning(f"TorchScript compilation failed: {e}")
+        
+        return model
+    except Exception as e:
+        logger.error(f"Error optimizing model: {e}")
+        return model
+
+def resize_image(image, max_size=640):
+    """
+    Resize image while maintaining aspect ratio to reduce processing time.
+    
+    Args:
+        image: Input image
+        max_size: Maximum dimension size
+        
+    Returns:
+        Resized image
+    """
+    if image is None:
+        return None
+    
+    h, w = image.shape[:2]
+    if max(h, w) > max_size:
+        scale = max_size / max(h, w)
+        new_w, new_h = int(w * scale), int(h * scale)
+        image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    
+    return image
