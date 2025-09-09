@@ -403,9 +403,31 @@ class FacialRecognitionAPI:
             # Aplatir si nécessaire
             if len(embedding.shape) > 1:
                 embedding = embedding.flatten()
+            
+            # Vérifier la présence de valeurs invalides dans l'embedding généré
+            if torch.isnan(embedding).any():
+                print(f"ATTENTION: embedding généré contient des NaN - {torch.isnan(embedding).sum()} valeurs")
+                embedding = torch.nan_to_num(embedding, nan=0.0)
+            
+            if torch.isinf(embedding).any():
+                print(f"ATTENTION: embedding généré contient des valeurs infinies - {torch.isinf(embedding).sum()} valeurs")
+                embedding = torch.nan_to_num(embedding, posinf=1.0, neginf=-1.0)
                 
-            # Normaliser l'embedding généré
-            embedding = torch.nn.functional.normalize(embedding.unsqueeze(0), p=2, dim=1).squeeze(0)
+            # Normaliser l'embedding généré SANS utiliser F.normalize
+            norm = torch.norm(embedding)
+            if norm > 0:
+                embedding = embedding / norm
+            else:
+                print("Embedding généré a une norme nulle - utilisation d'un embedding aléatoire")
+                embedding = torch.randn_like(embedding) * 0.01
+                embedding = embedding / torch.norm(embedding)
+            
+            print(f"Embedding normalisé: norme={torch.norm(embedding):.6f}, min={embedding.min():.6f}, max={embedding.max():.6f}")
+            
+            # Vérification finale de l'embedding généré
+            if torch.isnan(embedding).any() or torch.isinf(embedding).any():
+                print("ERREUR: embedding généré contient encore des valeurs invalides après normalisation!")
+                return "ERROR", 1.0
             
             # Calculer les distances avec tous les embeddings sauvegardés
             distances = {}
