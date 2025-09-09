@@ -379,7 +379,25 @@ class FacialRecognitionAPI:
             face_img = cv2.convertScaleAbs(face_img, alpha=1.1, beta=10)  # Contraste et luminosité
             
             face_pil = Image.fromarray(cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB))
+            
+            # DEBUG: Sauvegarder l'image pour vérification
+            if self.is_raspberry_pi:
+                debug_path = f"debug_face_{int(time.time())}.jpg"
+                face_pil.save(debug_path)
+                print(f"Image de visage sauvegardée: {debug_path}")
+            
             face_tensor = preprocess_face(face_pil)
+            print(f"Face tensor après preprocessing: shape={face_tensor.shape}, dtype={face_tensor.dtype}")
+            print(f"Face tensor stats: min={face_tensor.min():.6f}, max={face_tensor.max():.6f}, mean={face_tensor.mean():.6f}")
+            
+            # Vérifier si le preprocessing a généré des valeurs invalides
+            if torch.isnan(face_tensor).any():
+                print(f"ERREUR: Le preprocessing a généré des NaN!")
+                return "ERROR", 1.0
+            
+            if torch.isinf(face_tensor).any():
+                print(f"ERREUR: Le preprocessing a généré des valeurs infinies!")
+                return "ERROR", 1.0
             
             # S'assurer que le tensor est sur le bon device
             if self.DEVICE == 'cuda' and torch.cuda.is_available():
@@ -388,6 +406,7 @@ class FacialRecognitionAPI:
                 face_tensor = face_tensor.to('cpu')
             
             embedding = get_embedding(self.model, face_tensor, self.DEVICE)
+            
             print(f"Embedding généré: type={type(embedding)}, shape={getattr(embedding, 'shape', 'N/A')}")
             
             # S'assurer que l'embedding est un tensor PyTorch
@@ -407,7 +426,8 @@ class FacialRecognitionAPI:
             # Vérifier la présence de valeurs invalides dans l'embedding généré
             if torch.isnan(embedding).any():
                 print(f"ATTENTION: embedding généré contient des NaN - {torch.isnan(embedding).sum()} valeurs")
-                embedding = torch.nan_to_num(embedding, nan=0.0)
+                print("Ce problème vient du modèle lui-même - vérifiez la compatibilité Raspberry Pi")
+                return "ERROR", 1.0
             
             if torch.isinf(embedding).any():
                 print(f"ATTENTION: embedding généré contient des valeurs infinies - {torch.isinf(embedding).sum()} valeurs")
@@ -418,9 +438,8 @@ class FacialRecognitionAPI:
             if norm > 0:
                 embedding = embedding / norm
             else:
-                print("Embedding généré a une norme nulle - utilisation d'un embedding aléatoire")
-                embedding = torch.randn_like(embedding) * 0.01
-                embedding = embedding / torch.norm(embedding)
+                print("Embedding généré a une norme nulle - problème avec le modèle")
+                return "ERROR", 1.0
             
             print(f"Embedding normalisé: norme={torch.norm(embedding):.6f}, min={embedding.min():.6f}, max={embedding.max():.6f}")
             
