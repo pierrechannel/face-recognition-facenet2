@@ -634,5 +634,5 @@ class FacialRecognitionAPI:
                 self.THRESHOLD = 0.9
             elif brightness > 180:  # Forte luminosité
                 self.THRESHOLD = 0.8
-            else:  # Luminosité normale
+            else:  # Luminosité normale ff
                 self.THRESHOLD = 0.85
