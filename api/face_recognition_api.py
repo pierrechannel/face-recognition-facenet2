@@ -362,9 +362,12 @@ class FacialRecognitionAPI:
             if face_img.size == 0:
                 return "UNKNOWN", 1.0
             
-            # Convert to PIL and preprocess
-            face_pil = Image.fromarray(cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB))
-            face_tensor = preprocess_face(face_pil)
+            # Convert BGR to RGB (OpenCV uses BGR, PIL uses RGB)
+            face_img_rgb = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
+            
+            # Pass the numpy array directly to preprocess_face
+            # The updated preprocess_face function can handle numpy arrays
+            face_tensor = preprocess_face(face_img_rgb)
             
             if face_tensor is None:
                 return "UNKNOWN", 1.0
@@ -388,7 +391,6 @@ class FacialRecognitionAPI:
         except Exception as e:
             logger.error(f"Recognition error: {e}")
             return "ERROR", 1.0
-    
     def euclidean_distance(self, t1, t2):
         """Calculate Euclidean distance between two tensors"""
         if isinstance(t1, np.ndarray):
