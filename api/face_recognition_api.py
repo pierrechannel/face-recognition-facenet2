@@ -31,7 +31,7 @@ class FacialRecognitionAPI:
         
         # Ajustement du seuil pour Raspberry Pi
         if self.is_raspberry_pi:
-            self.THRESHOLD = 0.50  # Seuil plus élevé pour Raspberry Pi
+            self.THRESHOLD = 0.75  # Seuil équilibré pour Raspberry Pi
             print(f"Raspberry Pi détecté - Seuil ajusté à {self.THRESHOLD}")
         else:
             self.THRESHOLD = 0.7
