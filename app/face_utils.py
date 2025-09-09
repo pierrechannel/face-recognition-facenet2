@@ -22,5 +22,4 @@ def preprocess_face(image):
 
 def get_embedding(model, image_tensor, device='cpu'):
     with torch.no_grad():
-        # Retourner directement le Tensor sans conversion numpy
-        return model(image_tensor.to(device))[0]
+        return model(image_tensor.to(device)).cpu().numpy()[0]
