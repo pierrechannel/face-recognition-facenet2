@@ -455,43 +455,13 @@ class FacialRecognitionAPI:
             return "ERROR", 1.0
     
     def euclidean_distance(self, t1, t2):
-        """Calculate Euclidean distance between two tensors with NaN protection"""
-        try:
-            # Convert to tensors if they are numpy arrays
-            if isinstance(t1, np.ndarray):
-                t1 = torch.tensor(t1, dtype=torch.float32)
-            if isinstance(t2, np.ndarray):
-                t2 = torch.tensor(t2, dtype=torch.float32)
-            
-            # Ensure both tensors are on the same device and have the same dtype
-            t1 = t1.to(self.DEVICE).float()
-            t2 = t2.to(self.DEVICE).float()
-            
-            # Add a small epsilon to prevent division by zero or invalid operations
-            epsilon = 1e-6
-            
-            # Check for NaN or inf values
-            if torch.isnan(t1).any() or torch.isinf(t1).any():
-                print("❌ WARNING: t1 contains NaN or inf values")
-                return 1.0  # Maximum distance
-            
-            if torch.isnan(t2).any() or torch.isinf(t2).any():
-                print("❌ WARNING: t2 contains NaN or inf values")
-                return 1.0  # Maximum distance
-            
-            # Calculate distance with protection
-            distance = torch.norm(t1 - t2 + epsilon).item()
-            
-            # Check if the result is valid
-            if np.isnan(distance) or np.isinf(distance):
-                print("❌ WARNING: Distance calculation resulted in NaN or inf")
-                return 1.0  # Maximum distance
-                
-            return distance
-            
-        except Exception as e:
-            print(f"❌ Error in distance calculation: {e}")
-            return 1.0  # Maximum distance in case of error
+        """Calculate Euclidean distance between two tensors"""
+        if isinstance(t1, np.ndarray):
+            t1 = torch.tensor(t1)
+        if isinstance(t2, np.ndarray):
+            t2 = torch.tensor(t2)
+        distance = torch.norm(t1 - t2).item()
+        return distance
     
     def process_access_request(self, recognized_faces):
         """Process access request based on recognized faces"""
