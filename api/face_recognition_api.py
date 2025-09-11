@@ -14,6 +14,8 @@ from contextlib import contextmanager
 from numpy.linalg import norm
 import tempfile
 import pyttsx3  # Simple offline TTS library
+import paho.mqtt.client as mqtt  # Add MQTT client
+import json  # For JSON serialization
 
 from app.model import load_facenet_model
 from app.face_utils import preprocess_face, get_embedding
@@ -33,6 +35,14 @@ class FacialRecognitionAPI:
         self.THRESHOLD = 0.7
         self.DETECTION_DELAY = 3
         self.door_unlock_available_until = 0
+        
+        # MQTT Configuration
+        self.MQTT_BROKER = "de7ccf69e70f4ffea025b868e4f08223.s1.eu.hivemq.cloud"  # HiveMQ public broker
+        self.MQTT_PORT = 8883
+        self.MQTT_TOPIC_IMAGE = "facial_recognition/images"
+        self.MQTT_TOPIC_RESULTS = "facial_recognition/results"
+        self.MQTT_CLIENT_ID = f"facial_recognition_{int(time.time())}"
+        self.MQTT_QOS = 1  # At least once delivery
         
         # Audio settings
         self.ENABLE_AUDIO = True
@@ -62,6 +72,10 @@ class FacialRecognitionAPI:
         self.fps_start_time = time.time()
         self.debug_mode = False  # Control verbose logging
         
+        # MQTT client
+        self.mqtt_client = None
+        self.mqtt_connected = False
+        
         # Camera fallback configuration
         self.camera_configs = [
             {'id': 0, 'backend': cv2.CAP_DSHOW if not self.is_raspberry_pi else cv2.CAP_V4L2},
@@ -77,10 +91,131 @@ class FacialRecognitionAPI:
         # Initialize audio system
         self._init_audio_system()
         
+        # Initialize MQTT
+        self._init_mqtt()
+        
         # Load resources
         self.load_resources()
         logger.info("FacialRecognitionAPI initialized successfully!")
     
+    def _init_mqtt(self):
+        """Initialize MQTT client and connection"""
+        try:
+            self.mqtt_client = mqtt.Client(client_id=self.MQTT_CLIENT_ID)
+            self.mqtt_client.on_connect = self._on_mqtt_connect
+            self.mqtt_client.on_disconnect = self._on_mqtt_disconnect
+            
+            # Connect to broker
+            self.mqtt_client.connect(self.MQTT_BROKER, self.MQTT_PORT, keepalive=60)
+            self.mqtt_client.loop_start()
+            logger.info(f"MQTT client initialized, connecting to {self.MQTT_BROKER}:{self.MQTT_PORT}")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize MQTT client: {e}")
+            self.mqtt_client = None
+    
+    def _on_mqtt_connect(self, client, userdata, flags, rc):
+        """Callback for when MQTT client connects"""
+        if rc == 0:
+            self.mqtt_connected = True
+            logger.info("Connected to MQTT broker successfully")
+        else:
+            self.mqtt_connected = False
+            logger.error(f"Failed to connect to MQTT broker, return code: {rc}")
+    
+    def _on_mqtt_disconnect(self, client, userdata, rc):
+        """Callback for when MQTT client disconnects"""
+        self.mqtt_connected = False
+        if rc != 0:
+            logger.warning(f"Unexpected MQTT disconnection, return code: {rc}")
+        else:
+            logger.info("Disconnected from MQTT broker")
+    
+    def _publish_mqtt_message(self, topic, payload, retain=False):
+        """Publish a message to MQTT broker"""
+        if not self.mqtt_connected or self.mqtt_client is None:
+            logger.warning("MQTT client not connected, cannot publish message")
+            return False
+        
+        try:
+            result = self.mqtt_client.publish(
+                topic, 
+                payload, 
+                qos=self.MQTT_QOS, 
+                retain=retain
+            )
+            
+            # Wait for the message to be published
+            result.wait_for_publish(timeout=2.0)
+            
+            if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                self._debug_log(f"Message published to {topic}")
+                return True
+            else:
+                logger.error(f"Failed to publish message to {topic}, return code: {result.rc}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error publishing MQTT message: {e}")
+            return False
+    
+    def _publish_processed_image(self, frame, recognition_results):
+        """Publish processed image and results to MQTT"""
+        if frame is None:
+            return
+        
+        try:
+            # Convert frame to base64
+            img_base64 = self.frame_to_base64(frame)
+            
+            # Prepare message payload
+            timestamp = datetime.now().isoformat()
+            message = {
+                "timestamp": timestamp,
+                "image": img_base64,
+                "results": recognition_results,
+                "device_id": self.MQTT_CLIENT_ID
+            }
+            
+            # Convert to JSON
+            payload = json.dumps(message)
+            
+            # Publish to MQTT
+            success = self._publish_mqtt_message(self.MQTT_TOPIC_IMAGE, payload)
+            
+            if success:
+                self._debug_log("Processed image published to MQTT")
+            else:
+                logger.warning("Failed to publish processed image to MQTT")
+                
+        except Exception as e:
+            logger.error(f"Error preparing MQTT image message: {e}")
+    
+    def _publish_recognition_results(self, results):
+        """Publish recognition results to MQTT"""
+        try:
+            # Prepare message payload
+            timestamp = datetime.now().isoformat()
+            message = {
+                "timestamp": timestamp,
+                "results": results,
+                "device_id": self.MQTT_CLIENT_ID
+            }
+            
+            # Convert to JSON
+            payload = json.dumps(message)
+            
+            # Publish to MQTT
+            success = self._publish_mqtt_message(self.MQTT_TOPIC_RESULTS, payload)
+            
+            if success:
+                self._debug_log("Recognition results published to MQTT")
+            else:
+                logger.warning("Failed to publish recognition results to MQTT")
+                
+        except Exception as e:
+            logger.error(f"Error preparing MQTT results message: {e}")
+
     def _init_audio_system(self):
         """Initialize pyttsx3 for audio playback"""
         try:
@@ -273,6 +408,8 @@ class FacialRecognitionAPI:
                     
                     frame_count = 0
                     last_fps_log = time.time()
+                    last_mqtt_publish = 0
+                    mqtt_publish_interval = 2  # Publish to MQTT every 2 seconds
                     
                     while self.is_running:
                         ret, frame = cap.read()
@@ -291,7 +428,13 @@ class FacialRecognitionAPI:
                                 
                                 # Process recognition if enabled
                                 if self.stream_with_recognition:
-                                    self.annotated_frame = self.annotate_frame_with_recognition(frame.copy())
+                                    annotated_frame, recognition_results = self.annotate_frame_with_recognition(frame.copy())
+                                    self.annotated_frame = annotated_frame
+                                    
+                                    # Publish to MQTT at regular intervals
+                                    if current_time - last_mqtt_publish >= mqtt_publish_interval:
+                                        self._publish_processed_image(annotated_frame, recognition_results)
+                                        last_mqtt_publish = current_time
                                 else:
                                     self.annotated_frame = frame.copy()
                         else:
@@ -388,7 +531,7 @@ class FacialRecognitionAPI:
         return results
     
     def annotate_frame_with_recognition(self, frame):
-        """Annotate frame with face recognition results"""
+        """Annotate frame with face recognition results and return both frame and results"""
         faces = self.detect_and_recognize_faces(frame)
         
         for face in faces:
@@ -464,7 +607,7 @@ class FacialRecognitionAPI:
             cv2.putText(frame, text, (20, 35 + i * 25), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
-        return frame
+        return frame, faces
     
     def recognize_face(self, frame, box):
         """Recognize a face in the given bounding box"""
@@ -531,6 +674,9 @@ class FacialRecognitionAPI:
             'recognized_faces': [f for f in recognized_faces if f['recognized']],
             'unlock_window_valid': self.is_unlock_window_valid()
         }
+        
+        # Publish results to MQTT
+        self._publish_recognition_results(result)
         
         logger.info(f"Access request result: {result}")
         return result
@@ -681,3 +827,10 @@ class FacialRecognitionAPI:
         """Enable or disable audio messages"""
         self.ENABLE_AUDIO = enabled
         logger.info(f"Audio {'enabled' if enabled else 'disabled'}")
+    
+    def disconnect_mqtt(self):
+        """Disconnect from MQTT broker"""
+        if self.mqtt_client:
+            self.mqtt_client.loop_stop()
+            self.mqtt_client.disconnect()
+            logger.info("MQTT client disconnected")
