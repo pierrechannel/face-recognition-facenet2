@@ -1,11 +1,8 @@
 import time
 import threading
 import logging
-import os
-import io
+import subprocess
 from datetime import datetime
-from google.cloud import texttospeech  # Added for Google TTS
-import pygame  # Added for audio playback
 
 logger = logging.getLogger(__name__)
 
@@ -26,117 +23,70 @@ class DoorController:
         self.on_door_locked = None
         self.on_door_unlocked = None
         
-        # Google TTS client initialization
-        self.tts_client = None
-        self.pygame_initialized = False
-        self._init_google_tts()
+        # eSpeak settings with defaults
+        self.espeak_voice = getattr(config, 'ESPEAK_VOICE', 'en-us')
+        self.espeak_speed = getattr(config, 'ESPEAK_SPEED', 170)
+        self.espeak_pitch = getattr(config, 'ESPEAK_PITCH', 50)
         
-        # Audio playback queue
-        self.audio_queue = []
-        self.is_playing = False
+        # Verify eSpeak is installed
+        self._verify_espeak()
     
-    def _init_google_tts(self):
-        """Initialize Google TTS client"""
+    def _verify_espeak(self):
+        """Check if eSpeak is installed and working"""
         try:
-            # Set up Google Cloud credentials (ensure GOOGLE_APPLICATION_CREDENTIALS is set)
-            if hasattr(self.config, 'GOOGLE_APPLICATION_CREDENTIALS'):
-                os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = self.config.GOOGLE_APPLICATION_CREDENTIALS
-            
-            self.tts_client = texttospeech.TextToSpeechClient()
-            
-            # Initialize pygame for audio playback
-            pygame.mixer.init()
-            self.pygame_initialized = True
-            logger.info("Google TTS client initialized successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize Google TTS: {e}")
-            self.tts_client = None
+            result = subprocess.run(['espeak', '--version'], 
+                                  capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                logger.info("eSpeak is installed and working")
+                return True
+            else:
+                logger.warning("eSpeak may not be properly installed")
+                return False
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            logger.warning("eSpeak is not installed. Installing now...")
+            return self._install_espeak()
     
-    def synthesize_speech(self, text, voice_name=None, language_code="en-US"):
-        """Synthesize speech using Google TTS"""
-        if not self.tts_client:
-            logger.warning("Google TTS client not available")
-            return None
-        
+    def _install_espeak(self):
+        """Attempt to install eSpeak"""
         try:
-            # Set up the text input
-            synthesis_input = texttospeech.SynthesisInput(text=text)
-            
-            # Build the voice request
-            voice = texttospeech.VoiceSelectionParams(
-                language_code=language_code,
-                name=voice_name or getattr(self.config, 'TTS_VOICE', 'en-US-Wavenet-D'),
-                ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL
-            )
-            
-            # Select the type of audio file
-            audio_config = texttospeech.AudioConfig(
-                audio_encoding=texttospeech.AudioEncoding.MP3,
-                speaking_rate=getattr(self.config, 'TTS_SPEAKING_RATE', 1.0),
-                pitch=getattr(self.config, 'TTS_PITCH', 0.0),
-                volume_gain_db=getattr(self.config, 'TTS_VOLUME_GAIN', 0.0)
-            )
-            
-            # Perform the text-to-speech request
-            response = self.tts_client.synthesize_speech(
-                input=synthesis_input, voice=voice, audio_config=audio_config
-            )
-            
-            return response.audio_content
-            
+            result = subprocess.run(['sudo', 'apt-get', 'update'], 
+                                  capture_output=True, text=True, timeout=60)
+            result = subprocess.run(['sudo', 'apt-get', 'install', '-y', 'espeak', 'espeak-data'], 
+                                  capture_output=True, text=True, timeout=120)
+            if result.returncode == 0:
+                logger.info("eSpeak installed successfully")
+                return True
+            else:
+                logger.error("Failed to install eSpeak")
+                return False
         except Exception as e:
-            logger.error(f"Google TTS synthesis failed: {e}")
-            return None
-    
-    def play_audio(self, audio_content):
-        """Play audio content using pygame"""
-        if not self.pygame_initialized or not audio_content:
+            logger.error(f"Error installing eSpeak: {e}")
             return False
-        
+    
+    def speak(self, text, voice=None, speed=None, pitch=None):
+        """Use eSpeak to speak text aloud (non-blocking)"""
         try:
-            # Create a temporary audio file in memory
-            audio_file = io.BytesIO(audio_content)
-            pygame.mixer.music.load(audio_file)
-            pygame.mixer.music.play()
+            voice = voice or self.espeak_voice
+            speed = speed or self.espeak_speed
+            pitch = pitch or self.espeak_pitch
             
-            # Wait for playback to finish
-            while pygame.mixer.music.get_busy():
-                pygame.time.wait(100)
-                
+            command = [
+                'espeak',
+                '-v', str(voice),
+                '-s', str(speed),
+                '-p', str(pitch),
+                '"' + text + '"'
+            ]
+            
+            # Run in background without waiting for completion
+            subprocess.Popen(command, 
+                           stdout=subprocess.DEVNULL, 
+                           stderr=subprocess.DEVNULL)
+            logger.debug(f"Speaking: {text}")
             return True
             
         except Exception as e:
-            logger.error(f"Audio playback failed: {e}")
-            return False
-    
-    def speak(self, text, async_playback=True):
-        """Speak text using Google TTS"""
-        if not self.tts_client:
-            logger.warning("Cannot speak - TTS client not available")
-            return False
-        
-        try:
-            # Synthesize speech
-            audio_content = self.synthesize_speech(text)
-            if not audio_content:
-                return False
-            
-            if async_playback:
-                # Play audio in a separate thread to avoid blocking
-                def play_async():
-                    self.play_audio(audio_content)
-                
-                thread = threading.Thread(target=play_async)
-                thread.daemon = True
-                thread.start()
-                return True
-            else:
-                # Play audio synchronously
-                return self.play_audio(audio_content)
-                
-        except Exception as e:
-            logger.error(f"Speech synthesis failed: {e}")
+            logger.error(f"eSpeak error: {e}")
             return False
     
     def unlock_door(self, person_name, confidence, distance, method='recognition'):
@@ -158,8 +108,8 @@ class DoorController:
         
         logger.info(f"Door unlocked for {person_name} via {method} (confidence: {confidence:.1f}%)")
         
-        # SPEAK: Access granted message with Google TTS
-        welcome_message = f"Welcome home {person_name}. The door is now unlocked."
+        # SPEAK: Access granted message
+        welcome_message = f"Welcome home {person_name}. Door unlocked."
         self.speak(welcome_message)
         
         # Set unlock window expiration
@@ -183,11 +133,11 @@ class DoorController:
         
         logger.info(f"Door locked via {method}")
         
-        # SPEAK: Door locked message with Google TTS
+        # SPEAK: Door locked message (only if not automatic relock to avoid spam)
         if method != 'automatic':
-            lock_message = "Door is now locked"
+            lock_message = "Door locked"
         else:
-            lock_message = "Door has been automatically locked"
+            lock_message = "Door automatically locked"
         
         self.speak(lock_message)
         
@@ -269,9 +219,9 @@ class DoorController:
                 'door_locked': False
             }
         else:
-            # SPEAK: Access denied to ESP32 request with Google TTS
+            # SPEAK: Access denied to ESP32 request
             if not self.is_unlock_window_valid():
-                self.speak("Access not authorized at this time")
+                self.speak("Access not authorized")
             
             return {
                 'open': 0,
@@ -296,10 +246,11 @@ class DoorController:
         )
         self._relock_timer.start()
         
-        # SPEAK: Countdown warning with Google TTS
+        # SPEAK: Countdown warning
         countdown_seconds = int(self.config.DOOR_RELOCK_COUNTDOWN)
-        countdown_msg = f"The door will lock in {countdown_seconds} seconds"
-        self.speak(countdown_msg)
+        if countdown_seconds > 5:  # Only announce if it's a meaningful duration
+            countdown_msg = f"Door will lock in {countdown_seconds} seconds"
+            self.speak(countdown_msg)
         
         logger.info(f"Door will auto-relock in {self.config.DOOR_RELOCK_COUNTDOWN} seconds")
     
@@ -317,8 +268,8 @@ class DoorController:
             'method': 'facial_recognition'
         }
         
-        # SPEAK: Access denied with Google TTS
-        self.speak("Access denied. Person not recognized in the system.")
+        # SPEAK: Access denied
+        self.speak("Access denied. Person not recognized.")
         
         logger.info("Access denied - unknown person")
     
@@ -332,14 +283,12 @@ class DoorController:
             self._esp32_relock_timer.cancel()
             self._esp32_relock_timer = None
     
-    def test_speech(self, message="Testing Google text to speech synthesis"):
-        """Test method to verify Google TTS is working"""
-        success = self.speak(message, async_playback=False)
+    def test_speech(self, message="Testing speech synthesis"):
+        """Test method to verify eSpeak is working"""
+        success = self.speak(message)
         return f"Speech test {'succeeded' if success else 'failed'}: {message}"
     
     def cleanup(self):
         """Cleanup resources"""
         self._cancel_timers()
-        if self.pygame_initialized:
-            pygame.mixer.quit()
         logger.info("Door controller cleaned up")
