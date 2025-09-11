@@ -13,9 +13,7 @@ import logging
 from contextlib import contextmanager
 from numpy.linalg import norm
 import tempfile
-import pygame
-from gtts import gTTS
-import io
+import pyttsx3  # Simple offline TTS library
 
 from app.model import load_facenet_model
 from app.face_utils import preprocess_face, get_embedding
@@ -84,10 +82,27 @@ class FacialRecognitionAPI:
         logger.info("FacialRecognitionAPI initialized successfully!")
     
     def _init_audio_system(self):
-        """Initialize pygame mixer for audio playback"""
+        """Initialize pyttsx3 for audio playback"""
         try:
-            pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
-            logger.info("Audio system initialized")
+            self.tts_engine = pyttsx3.init()
+            
+            # Set voice properties
+            voices = self.tts_engine.getProperty('voices')
+            
+            # Try to find a French voice if available
+            if self.AUDIO_LANGUAGE == 'fr':
+                for voice in voices:
+                    if 'french' in voice.name.lower() or 'fr' in voice.id.lower():
+                        self.tts_engine.setProperty('voice', voice.id)
+                        break
+            
+            # Set speech rate (words per minute)
+            self.tts_engine.setProperty('rate', 150)
+            
+            # Set volume (0.0 to 1.0)
+            self.tts_engine.setProperty('volume', 0.9)
+            
+            logger.info("Audio system initialized with pyttsx3")
         except Exception as e:
             logger.warning(f"Failed to initialize audio system: {e}")
             self.ENABLE_AUDIO = False
@@ -98,24 +113,12 @@ class FacialRecognitionAPI:
             return
             
         try:
-            lang = language or self.AUDIO_LANGUAGE
-            tts = gTTS(text=text, lang=lang, slow=False)
+            # Run TTS in a thread to avoid blocking
+            def speak():
+                self.tts_engine.say(text)
+                self.tts_engine.runAndWait()
             
-            # Create temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
-                tts.save(tmp_file.name)
-                tmp_filename = tmp_file.name
-            
-            # Play audio
-            pygame.mixer.music.load(tmp_filename)
-            pygame.mixer.music.play()
-            
-            # Wait for playback to finish
-            while pygame.mixer.music.get_busy():
-                time.sleep(0.1)
-            
-            # Clean up
-            os.unlink(tmp_filename)
+            threading.Thread(target=speak, daemon=True).start()
             
         except Exception as e:
             logger.error(f"Text-to-speech error: {e}")
@@ -130,8 +133,8 @@ class FacialRecognitionAPI:
         else:
             message = "Accès refusé, personne non reconnue"
         
-        # Play message in background thread to avoid blocking
-        threading.Thread(target=self.speak_message, args=(message,), daemon=True).start()
+        # Play message
+        self.speak_message(message)
     
     def set_debug_mode(self, enabled):
         """Enable/disable debug mode for verbose logging"""
@@ -590,7 +593,7 @@ class FacialRecognitionAPI:
             self._relock_timer = None
         
         # Speak relock message
-        threading.Thread(target=self.speak_message, args=("Porte verrouillée",), daemon=True).start()
+        self.speak_message("Porte verrouillée")
         
     def is_unlock_window_valid(self):
         """Check if the unlock window is still valid"""
