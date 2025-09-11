@@ -12,6 +12,10 @@ import base64
 import logging
 from contextlib import contextmanager
 from numpy.linalg import norm
+import tempfile
+import pygame
+from gtts import gTTS
+import io
 
 from app.model import load_facenet_model
 from app.face_utils import preprocess_face, get_embedding
@@ -21,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 class FacialRecognitionAPI:
     def __init__(self):
-        print("🚀 Initializing FacialRecognitionAPI...")
+        logger.info("Initializing FacialRecognitionAPI...")
         
         # Configuration
         self.MODEL_PATH = "facenet_africain_finetuned.pth"
@@ -32,13 +36,15 @@ class FacialRecognitionAPI:
         self.DETECTION_DELAY = 3
         self.door_unlock_available_until = 0
         
-        print(f"📱 Device: {self.DEVICE}")
-        print(f"🎯 Threshold: {self.THRESHOLD}")
+        # Audio settings
+        self.ENABLE_AUDIO = True
+        self.AUDIO_LANGUAGE = 'fr'  # French by default
+        
+        logger.info(f"Device: {self.DEVICE}, Threshold: {self.THRESHOLD}")
         
         # Platform detection
         self.is_raspberry_pi = platform.machine() in ('armv7l', 'armv6l', 'aarch64')
-        print(f"🍓 Raspberry Pi detected: {self.is_raspberry_pi}")
-        print(f"💻 Platform: {platform.machine()}")
+        logger.info(f"Raspberry Pi detected: {self.is_raspberry_pi}, Platform: {platform.machine()}")
         
         # State variables
         self.cap = None
@@ -56,210 +62,273 @@ class FacialRecognitionAPI:
         self.stream_with_recognition = False
         self.fps_counter = 0
         self.fps_start_time = time.time()
+        self.debug_mode = False  # Control verbose logging
+        
+        # Camera fallback configuration
+        self.camera_configs = [
+            {'id': 0, 'backend': cv2.CAP_DSHOW if not self.is_raspberry_pi else cv2.CAP_V4L2},
+            {'id': 1, 'backend': cv2.CAP_DSHOW if not self.is_raspberry_pi else cv2.CAP_V4L2},
+            {'id': 0, 'backend': cv2.CAP_ANY},
+            {'id': 1, 'backend': cv2.CAP_ANY},
+            {'id': 2, 'backend': cv2.CAP_ANY},
+        ]
         
         # Create directories
-        print(f"📁 Creating capture directory: {self.CAPTURE_DIR}")
         os.makedirs(self.CAPTURE_DIR, exist_ok=True)
+        
+        # Initialize audio system
+        self._init_audio_system()
         
         # Load resources
         self.load_resources()
-        print("✅ FacialRecognitionAPI initialized successfully!")
+        logger.info("FacialRecognitionAPI initialized successfully!")
+    
+    def _init_audio_system(self):
+        """Initialize pygame mixer for audio playback"""
+        try:
+            pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
+            logger.info("Audio system initialized")
+        except Exception as e:
+            logger.warning(f"Failed to initialize audio system: {e}")
+            self.ENABLE_AUDIO = False
+    
+    def speak_message(self, text, language=None):
+        """Convert text to speech and play it"""
+        if not self.ENABLE_AUDIO:
+            return
+            
+        try:
+            lang = language or self.AUDIO_LANGUAGE
+            tts = gTTS(text=text, lang=lang, slow=False)
+            
+            # Create temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
+                tts.save(tmp_file.name)
+                tmp_filename = tmp_file.name
+            
+            # Play audio
+            pygame.mixer.music.load(tmp_filename)
+            pygame.mixer.music.play()
+            
+            # Wait for playback to finish
+            while pygame.mixer.music.get_busy():
+                time.sleep(0.1)
+            
+            # Clean up
+            os.unlink(tmp_filename)
+            
+        except Exception as e:
+            logger.error(f"Text-to-speech error: {e}")
+    
+    def _speak_access_message(self, name, granted):
+        """Speak access message in appropriate language"""
+        if granted:
+            if name in ['UNKNOWN', 'ERROR']:
+                message = "Accès autorisé"
+            else:
+                message = f"Bonjour {name}, accès autorisé"
+        else:
+            message = "Accès refusé, personne non reconnue"
+        
+        # Play message in background thread to avoid blocking
+        threading.Thread(target=self.speak_message, args=(message,), daemon=True).start()
+    
+    def set_debug_mode(self, enabled):
+        """Enable/disable debug mode for verbose logging"""
+        self.debug_mode = enabled
+        logger.info(f"Debug mode {'enabled' if enabled else 'disabled'}")
+    
+    def _debug_log(self, message):
+        """Log debug messages only if debug mode is enabled"""
+        if self.debug_mode:
+            print(f"[DEBUG] {message}")
     
     def load_resources(self): 
         """Load model and embeddings"""
         try:
-            print("🔄 Loading facial recognition resources...")
+            logger.info("Loading facial recognition resources...")
             
-            print(f"🧠 Loading model from: {self.MODEL_PATH}")
-            logger.info("Loading facial recognition model...")
+            logger.info(f"Loading model from: {self.MODEL_PATH}")
             self.model = self.load_model(self.MODEL_PATH)
-            print("✅ Model loaded successfully!")
             
-            print(f"💾 Loading embeddings from: {self.EMBEDDINGS_DIR}")
-            logger.info("Loading saved embeddings...")
+            logger.info(f"Loading embeddings from: {self.EMBEDDINGS_DIR}")
             self.saved_embeddings = self.get_all_saved_embeddings()
-            print(f"✅ {len(self.saved_embeddings)} embeddings loaded!")
             
-            print("👤 Loading face detector...")
             logger.info("Loading face detector...")
             self.face_detector = cv2.CascadeClassifier(
                 cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-            print("✅ Face detector loaded!")
             
-            print(f"🎉 System ready - {len(self.saved_embeddings)} known faces loaded")
             logger.info(f"System ready - {len(self.saved_embeddings)} known faces loaded")
             
         except Exception as e:
-            print(f"❌ Error loading resources: {str(e)}")
             logger.error(f"Error loading resources: {str(e)}")
             raise
     
     def load_model(self, path):
         """Load the facial recognition model"""
-        print(f"🔄 Loading model from path: {path}")
-        print(f"📊 Model exists: {os.path.exists(path)}")
+        self._debug_log(f"Loading model from path: {path}")
+        self._debug_log(f"Model exists: {os.path.exists(path)}")
         
         model = load_facenet_model()
-        print("🏗️ Model architecture loaded")
-        
         model.load_state_dict(torch.load(path, map_location=self.DEVICE))
-        print(f"⚙️ Model weights loaded to device: {self.DEVICE}")
-        
         model.to(self.DEVICE)
         model.eval()
-        print("✅ Model set to evaluation mode")
         
+        logger.info("Model loaded and set to evaluation mode")
         return model
     
     def get_all_saved_embeddings(self):
         """Load all saved embeddings from disk"""
-        print(f"🔍 Scanning embeddings directory: {self.EMBEDDINGS_DIR}")
         embeddings = {}
         
         if os.path.exists(self.EMBEDDINGS_DIR):
-            files = os.listdir(self.EMBEDDINGS_DIR)
-            print(f"📂 Found {len(files)} files in embeddings directory")
+            files = [f for f in os.listdir(self.EMBEDDINGS_DIR) if f.endswith(".pt")]
+            logger.info(f"Found {len(files)} embedding files")
             
             for file in files:
-                if file.endswith(".pt"):
-                    print(f"📥 Loading embedding: {file}")
-                    name = file[:-3]
-                    embedding = load_embedding(name)
-                    embeddings[name] = embedding
-                    print(f"✅ Loaded embedding for: {name}")
+                name = file[:-3]
+                embedding = load_embedding(name)
+                embeddings[name] = embedding
+                self._debug_log(f"Loaded embedding for: {name}")
         else:
-            print(f"⚠️ Embeddings directory doesn't exist: {self.EMBEDDINGS_DIR}")
+            logger.warning(f"Embeddings directory doesn't exist: {self.EMBEDDINGS_DIR}")
             
-        print(f"📊 Total embeddings loaded: {len(embeddings)}")
+        logger.info(f"Total embeddings loaded: {len(embeddings)}")
         return embeddings
     
-    @contextmanager
-    def camera_context(self, camera_id=0):
-        """Context manager for camera operations"""
-        print(f"📹 Initializing camera {camera_id}...")
-        cap = None
+    def _try_camera_config(self, config):
+        """Try to open camera with specific configuration"""
         try:
-            if self.is_raspberry_pi:
-                print("🍓 Using Raspberry Pi camera configuration")
-                cap = cv2.VideoCapture(camera_id)
-            else:
-                print("💻 Using desktop camera configuration (DSHOW)")
-                cap = cv2.VideoCapture(camera_id, cv2.CAP_DSHOW)
+            camera_id = config['id']
+            backend = config['backend']
+            
+            self._debug_log(f"Trying camera {camera_id} with backend {backend}")
+            
+            cap = cv2.VideoCapture(camera_id, backend)
             
             if not cap.isOpened():
-                print(f"❌ Cannot open camera {camera_id}")
-                raise Exception(f"Cannot open camera {camera_id}")
+                return None
             
-            print(f"✅ Camera {camera_id} opened successfully")
+            # Test if we can read a frame
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                cap.release()
+                return None
             
             # Set camera properties
             if self.is_raspberry_pi:
-                print("🔧 Setting Raspberry Pi camera properties...")
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
                 cap.set(cv2.CAP_PROP_FPS, 15)
-                print("📏 Resolution: 640x480 @ 15fps")
             else:
-                print("🔧 Setting desktop camera properties...")
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
                 cap.set(cv2.CAP_PROP_FPS, 30)
-                print("📏 Resolution: 1280x720 @ 30fps")
             
+            logger.info(f"Camera {camera_id} opened successfully with backend {backend}")
+            return cap
+            
+        except Exception as e:
+            self._debug_log(f"Failed to open camera {config['id']} with backend {config['backend']}: {e}")
+            return None
+    
+    @contextmanager
+    def camera_context(self):
+        """Context manager for camera operations with fallback"""
+        cap = None
+        successful_config = None
+        
+        try:
+            # Try each camera configuration
+            for config in self.camera_configs:
+                cap = self._try_camera_config(config)
+                if cap is not None:
+                    successful_config = config
+                    break
+            
+            if cap is None:
+                raise Exception("No cameras available with any configuration")
+            
+            logger.info(f"Using camera {successful_config['id']} with backend {successful_config['backend']}")
             yield cap
             
         finally:
             if cap:
-                print(f"🔒 Releasing camera {camera_id}")
+                self._debug_log(f"Releasing camera {successful_config['id'] if successful_config else 'unknown'}")
                 cap.release()
     
     def start_camera_stream(self, enable_recognition=False):
         """Start continuous camera streaming with optional recognition"""
-        print(f"🎬 Starting camera stream (recognition: {enable_recognition})")
+        logger.info(f"Starting camera stream (recognition: {enable_recognition})")
         
         def stream():
             try:
-                # Try different camera indices
-                print("🔍 Searching for available cameras...")
-                for camera_id in [0, 1, 2]:
-                    print(f"🎯 Trying camera {camera_id}...")
-                    try:
-                        with self.camera_context(camera_id) as cap:
-                            self.cap = cap
-                            self.stream_with_recognition = enable_recognition
-                            print(f"🎉 Camera stream started on camera {camera_id} (recognition: {enable_recognition})")
-                            logger.info(f"Camera stream started on camera {camera_id} (recognition: {enable_recognition})")
+                with self.camera_context() as cap:
+                    self.cap = cap
+                    self.stream_with_recognition = enable_recognition
+                    logger.info(f"Camera stream started (recognition: {enable_recognition})")
+                    
+                    frame_count = 0
+                    last_fps_log = time.time()
+                    
+                    while self.is_running:
+                        ret, frame = cap.read()
+                        if ret:
+                            frame_count += 1
                             
-                            frame_count = 0
-                            while self.is_running:
-                                ret, frame = cap.read()
-                                if ret:
-                                    frame_count += 1
-                                    if frame_count % 150 == 0:  # Print every 5 seconds at 30fps
-                                        print(f"📸 Frame {frame_count} captured ({frame.shape[1]}x{frame.shape[0]})")
-                                    
-                                    # Update frame counter for FPS calculation
-                                    self.fps_counter += 1
-                                    current_time = time.time()
-                                    if current_time - self.fps_start_time >= 1.0:
-                                        print(f"🎬 FPS: {self.fps_counter}")
-                                        self.fps_start_time = current_time
-                                        self.fps_counter = 0
-                                    
-                                    with self.frame_lock:
-                                        self.current_frame = frame.copy()
-                                        
-                                        # Process recognition if enabled
-                                        if self.stream_with_recognition:
-                                            if frame_count % 30 == 0:  # Print every second
-                                                print("🔍 Processing frame for recognition...")
-                                            self.annotated_frame = self.annotate_frame_with_recognition(frame.copy())
-                                        else:
-                                            self.annotated_frame = frame.copy()
+                            # Log FPS every 5 seconds
+                            current_time = time.time()
+                            if current_time - last_fps_log >= 5.0:
+                                fps = frame_count / (current_time - self.fps_start_time + 0.001)
+                                logger.info(f"Camera FPS: {fps:.1f}, Frame: {frame_count}")
+                                last_fps_log = current_time
+                            
+                            with self.frame_lock:
+                                self.current_frame = frame.copy()
+                                
+                                # Process recognition if enabled
+                                if self.stream_with_recognition:
+                                    self.annotated_frame = self.annotate_frame_with_recognition(frame.copy())
                                 else:
-                                    print("⚠️ Failed to capture frame")
-                                            
-                                time.sleep(0.033)  # ~30 FPS
-                            
-                            print("🛑 Camera stream loop ended")
-                            break
-                            
-                    except Exception as e:
-                        print(f"❌ Failed to open camera {camera_id}: {e}")
-                        logger.warning(f"Failed to open camera {camera_id}: {e}")
-                        continue
-                else:
-                    print("❌ No cameras available")
-                    logger.error("No cameras available")
+                                    self.annotated_frame = frame.copy()
+                        else:
+                            logger.warning("Failed to capture frame")
+                                    
+                        time.sleep(0.033)  # ~30 FPS
+                    
+                    logger.info("Camera stream loop ended")
                     
             except Exception as e:
-                print(f"❌ Camera stream error: {e}")
                 logger.error(f"Camera stream error: {e}")
             finally:
-                print("🔄 Cleaning up camera resources...")
-                self.cap = None
-                with self.frame_lock:
-                    self.current_frame = None
-                    self.annotated_frame = None
-                print("✅ Camera cleanup complete")
+                self._cleanup_camera_resources()
         
         if not self.is_running:
-            print("▶️ Starting camera stream thread...")
+            logger.info("Starting camera stream thread...")
             self.is_running = True
             self.stream_active = True
             threading.Thread(target=stream, daemon=True).start()
         else:
-            print("⚠️ Camera stream already running")
+            logger.warning("Camera stream already running")
+    
+    def _cleanup_camera_resources(self):
+        """Clean up camera resources"""
+        self._debug_log("Cleaning up camera resources...")
+        self.cap = None
+        with self.frame_lock:
+            self.current_frame = None
+            self.annotated_frame = None
+        logger.info("Camera cleanup complete")
     
     def stop_camera_stream(self):
         """Stop camera streaming"""
-        print("🛑 Stopping camera stream...")
+        logger.info("Stopping camera stream...")
         self.is_running = False
         self.stream_active = False
         self.stream_with_recognition = False
         if self.cap:
             self.cap = None
-        print("✅ Camera stream stopped")
+        logger.info("Camera stream stopped")
     
     def get_current_frame(self, annotated=False):
         """Get the current frame from camera stream"""
@@ -270,46 +339,34 @@ class FacialRecognitionAPI:
     
     def detect_and_recognize_faces(self, frame):
         """Detect and recognize faces in a frame"""
-        print("🔍 Starting face detection and recognition...")
+        self._debug_log("Starting face detection and recognition...")
         
         if frame is None:
-            print("❌ No frame provided for face detection")
+            logger.warning("No frame provided for face detection")
             return []
-        
-        print(f"📏 Input frame shape: {frame.shape}")
         
         # Resize frame for faster processing if needed
         if self.is_raspberry_pi:
-            print("🍓 Resizing frame for Raspberry Pi processing...")
             processing_frame = cv2.resize(frame, (320, 240))
             scale_x = frame.shape[1] / processing_frame.shape[1]
             scale_y = frame.shape[0] / processing_frame.shape[0]
-            print(f"📐 Scale factors: x={scale_x:.2f}, y={scale_y:.2f}")
         else:
             processing_frame = frame.copy()
             scale_x = scale_y = 1.0
         
-        print("🔄 Converting to grayscale...")
         gray = cv2.cvtColor(processing_frame, cv2.COLOR_BGR2GRAY)
-        
-        print("👤 Detecting faces...")
         faces = self.face_detector.detectMultiScale(
             gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
         
-        print(f"👥 Found {len(faces)} faces")
+        self._debug_log(f"Found {len(faces)} faces")
         
         results = []
         for i, (x, y, w, h) in enumerate(faces):
-            print(f"🎯 Processing face {i+1}/{len(faces)} at ({x}, {y}, {w}, {h})")
-            
             # Scale back to original frame size
             x, y, w, h = int(x * scale_x), int(y * scale_y), int(w * scale_x), int(h * scale_y)
-            print(f"📐 Scaled coordinates: ({x}, {y}, {w}, {h})")
             
             # Recognize face
-            print(f"🔍 Recognizing face {i+1}...")
             name, distance = self.recognize_face(frame, (x, y, w, h))
-            print(f"🏷️ Face {i+1} result: {name} (distance: {distance:.3f})")
             
             face_result = {
                 'bbox': [x, y, w, h],
@@ -320,18 +377,18 @@ class FacialRecognitionAPI:
             }
             
             results.append(face_result)
-            print(f"✅ Face {i+1} processed: {face_result}")
+            self._debug_log(f"Face {i+1} processed: {name} (confidence: {face_result['confidence']:.1f}%)")
         
-        print(f"🎉 Face detection complete: {len(results)} faces processed")
+        if len(results) > 0:
+            logger.info(f"Face detection complete: {len(results)} faces processed")
+        
         return results
     
     def annotate_frame_with_recognition(self, frame):
         """Annotate frame with face recognition results"""
-        print("🎨 Annotating frame with recognition results...")
         faces = self.detect_and_recognize_faces(frame)
         
-        for i, face in enumerate(faces):
-            print(f"🖼️ Annotating face {i+1}/{len(faces)}")
+        for face in faces:
             x, y, w, h = face['bbox']
             name = face['name']
             confidence = face['confidence']
@@ -341,28 +398,32 @@ class FacialRecognitionAPI:
                 box_color = (0, 255, 0)  # Green for recognized
                 text_color = (0, 255, 0)
                 status = "ACCESS GRANTED"
-                self.door_locked = False
-                print(f"✅ Access granted for {name}")
+                if self.door_locked:  # Only speak when status changes
+                    self.door_locked = False
+                    self._speak_access_message(name, True)
             else:
                 box_color = (0, 0, 255)  # Red for unknown
                 text_color = (0, 0, 255)
                 status = "ACCESS DENIED"
-                self.door_locked = True
-                print(f"❌ Access denied for unknown person")
+                if not self.door_locked:  # Only speak when status changes
+                    self.door_locked = True
+                    self._speak_access_message(name, False)
             
             # Draw main bounding box
             cv2.rectangle(frame, (x, y), (x + w, y + h), box_color, 3)
             
             # Draw corner accents
             corner_length = 20
-            cv2.line(frame, (x, y), (x + corner_length, y), box_color, 5)
-            cv2.line(frame, (x, y), (x, y + corner_length), box_color, 5)
-            cv2.line(frame, (x + w, y), (x + w - corner_length, y), box_color, 5)
-            cv2.line(frame, (x + w, y), (x + w, y + corner_length), box_color, 5)
-            cv2.line(frame, (x, y + h), (x + corner_length, y + h), box_color, 5)
-            cv2.line(frame, (x, y + h), (x, y + h - corner_length), box_color, 5)
-            cv2.line(frame, (x + w, y + h), (x + w - corner_length, y + h), box_color, 5)
-            cv2.line(frame, (x + w, y + h), (x + w, y + h - corner_length), box_color, 5)
+            corners = [
+                ((x, y), (x + corner_length, y), (x, y + corner_length)),
+                ((x + w, y), (x + w - corner_length, y), (x + w, y + corner_length)),
+                ((x, y + h), (x + corner_length, y + h), (x, y + h - corner_length)),
+                ((x + w, y + h), (x + w - corner_length, y + h), (x + w, y + h - corner_length))
+            ]
+            
+            for corner in corners:
+                cv2.line(frame, corner[0], corner[1], box_color, 5)
+                cv2.line(frame, corner[0], corner[2], box_color, 5)
             
             # Create info panel
             label = f"{name}"
@@ -400,57 +461,37 @@ class FacialRecognitionAPI:
             cv2.putText(frame, text, (20, 35 + i * 25), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
-        print("✅ Frame annotation complete")
         return frame
     
     def recognize_face(self, frame, box):
         """Recognize a face in the given bounding box"""
-        print(f"🔍 Recognizing face in bounding box: {box}")
         try:
             x, y, w, h = box
             face_img = frame[y:y+h, x:x+w]
-            print(f"👤 Extracted face image shape: {face_img.shape}")
             
             if face_img.size == 0:
-                print("❌ Empty face image extracted")
+                logger.warning("Empty face image extracted")
                 return "UNKNOWN", 1.0
             
-            print("🔄 Converting face to PIL format...")
             face_pil = Image.fromarray(cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB))
-            
-            print("⚙️ Preprocessing face...")
             face_tensor = preprocess_face(face_pil)
-            
-            print(f"🧠 Getting embedding using model on {self.DEVICE}...")
             embedding = get_embedding(self.model, face_tensor, self.DEVICE)
-            print(f"📊 Embedding shape: {embedding.shape}")
             
-            print(f"📏 Calculating distances to {len(self.saved_embeddings)} known faces...")
             distances = {name: self.euclidean_distance(embedding, emb)
                         for name, emb in self.saved_embeddings.items()}
-            
-            print(f"📊 Distance calculations: {distances}")
             
             if distances:
                 best_match = min(distances, key=distances.get)
                 best_distance = distances[best_match]
                 
-                print(f"🎯 Best match: {best_match} (distance: {best_distance:.3f})")
-                print(f"🔒 Threshold: {self.THRESHOLD}")
+                self._debug_log(f"Best match: {best_match} (distance: {best_distance:.3f})")
                 
                 if best_distance < self.THRESHOLD:
-                    print(f"✅ Face recognized as: {best_match}")
                     return best_match, best_distance
-                else:
-                    print(f"❌ Distance {best_distance:.3f} exceeds threshold {self.THRESHOLD}")
-            else:
-                print("⚠️ No saved embeddings to compare against")
             
-            print("❓ Face not recognized - returning UNKNOWN")
             return "UNKNOWN", 1.0
             
         except Exception as e:
-            print(f"❌ Recognition error: {e}")
             logger.error(f"Recognition error: {e}")
             return "ERROR", 1.0
     
@@ -465,25 +506,19 @@ class FacialRecognitionAPI:
     
     def process_access_request(self, recognized_faces):
         """Process access request based on recognized faces"""
-        print(f"🚪 Processing access request for {len(recognized_faces)} faces...")
+        logger.info(f"Processing access request for {len(recognized_faces)} faces...")
         
         access_granted = False
         recognized_person = None
         
-        for i, face in enumerate(recognized_faces):
-            print(f"🔍 Evaluating face {i+1}: {face['name']} (confidence: {face['confidence']:.1f}%)")
-            
+        for face in recognized_faces:
             if face['recognized'] and face['confidence'] > (1 - self.THRESHOLD) * 100:
-                print(f"✅ Access criteria met for {face['name']}")
                 access_granted = True
                 recognized_person = face['name']
                 self.unlock_door(face['name'], face['distance'])
                 break
-            else:
-                print(f"❌ Access criteria not met for {face['name']}")
         
         if not access_granted and recognized_faces:
-            print("🚫 No valid faces found - denying access")
             self.deny_access()
         
         result = {
@@ -494,12 +529,12 @@ class FacialRecognitionAPI:
             'unlock_window_valid': self.is_unlock_window_valid()
         }
         
-        print(f"🎉 Access request processed: {result}")
+        logger.info(f"Access request result: {result}")
         return result
     
     def unlock_door(self, name, distance):
         """Unlock the door for recognized person"""
-        print(f"🔓 UNLOCKING DOOR for {name}!")
+        logger.info(f"UNLOCKING DOOR for {name}!")
         
         # Unlock the door
         self.door_locked = False
@@ -515,27 +550,23 @@ class FacialRecognitionAPI:
         # Log the access
         self.log_access(name, "GRANTED", distance)
         
-        print(f"📝 Access logged for {name}")
-        logger.info(f"Access granted to {name}")
+        # Speak welcome message
+        self._speak_access_message(name, True)
         
         # Set a timestamp for when the unlock window expires (15 seconds total)
         self.door_unlock_available_until = time.time() + 15
-        print(f"⏰ Door unlock window valid until: {datetime.fromtimestamp(self.door_unlock_available_until)}")
         
         # Cancel any existing auto-relock timer and start a new one
         if hasattr(self, '_relock_timer') and self._relock_timer:
-            print("⏰ Cancelling existing relock timer")
             self._relock_timer.cancel()
         
         # Wait 5 seconds before starting the relock countdown
-        # This gives the person time to enter
-        print("⏰ Starting initial 5-second entry window...")
         self._relock_timer = threading.Timer(5.0, self.start_relock_countdown)
         self._relock_timer.start()
         
     def deny_access(self):
         """Deny access for unknown person"""
-        print("🚫 ACCESS DENIED - Unknown person")
+        logger.info("ACCESS DENIED - Unknown person")
         
         self.last_recognition = {
             'name': 'UNKNOWN',
@@ -547,24 +578,26 @@ class FacialRecognitionAPI:
         # Log the denied access
         self.log_access("UNKNOWN", "DENIED", 1.0)
         
-        print("📝 Access denial logged")
-        logger.info("Access denied - unknown person")
+        # Speak denial message
+        self._speak_access_message("UNKNOWN", False)
     
     def relock_door(self):
         """Relock the door after a timeout"""
-        print("🔒 DOOR AUTOMATICALLY RELOCKED!")
+        logger.info("DOOR AUTOMATICALLY RELOCKED!")
         self.door_locked = True
-        self.door_unlock_available_until = 0  # Clear any remaining unlock window
+        self.door_unlock_available_until = 0
         if hasattr(self, '_relock_timer'):
             self._relock_timer = None
-        logger.info("Door automatically relocked")
+        
+        # Speak relock message
+        threading.Thread(target=self.speak_message, args=("Porte verrouillée",), daemon=True).start()
         
     def is_unlock_window_valid(self):
         """Check if the unlock window is still valid"""
         valid = time.time() <= self.door_unlock_available_until
         if self.door_unlock_available_until > 0:
             remaining = max(0, self.door_unlock_available_until - time.time())
-            print(f"⏰ Unlock window valid: {valid} ({remaining:.1f}s remaining)")
+            self._debug_log(f"Unlock window valid: {valid} ({remaining:.1f}s remaining)")
         return valid
     
     def log_access(self, name, status, distance):
@@ -580,36 +613,38 @@ class FacialRecognitionAPI:
             'distance': distance
         }
         
-        print(f"📝 Logging access: {log_entry}")
         self.detection_history.append(log_entry)
         
         # Save to log file
         try:
             with open("access_log.txt", "a") as f:
                 f.write(f"[{timestamp}] {name} - {status} - {confidence}\n")
-            print("✅ Access logged to file")
+            self._debug_log("Access logged to file")
         except Exception as e:
-            print(f"❌ Failed to write to log file: {e}")
+            logger.error(f"Failed to write to log file: {e}")
     
     def frame_to_base64(self, frame):
         """Convert frame to base64 string"""
-        print("🔄 Converting frame to base64...")
         _, buffer = cv2.imencode('.jpg', frame)
         img_str = base64.b64encode(buffer).decode('utf-8')
-        print(f"✅ Frame converted to base64 ({len(img_str)} chars)")
         return img_str
     
     def generate_video_stream(self, annotated=False):
         """Generate video stream for HTTP streaming"""
-        print(f"🎬 Starting video stream generator (annotated: {annotated})")
+        logger.info(f"Starting video stream generator (annotated: {annotated})")
         stream_count = 0
+        last_log_time = time.time()
         
         while self.stream_active:
             frame = self.get_current_frame(annotated=annotated)
             if frame is not None:
                 stream_count += 1
-                if stream_count % 150 == 0:  # Print every 5 seconds at 30fps
-                    print(f"📺 Streaming frame {stream_count}")
+                
+                # Log streaming status every 10 seconds
+                current_time = time.time()
+                if current_time - last_log_time >= 10.0:
+                    logger.info(f"Streaming frame {stream_count}")
+                    last_log_time = current_time
                 
                 # Encode frame as JPEG
                 _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -619,17 +654,27 @@ class FacialRecognitionAPI:
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
             else:
-                if stream_count % 30 == 0:  # Print warning every second
-                    print("⚠️ No frame available for streaming")
+                # Only log occasionally when no frame is available
+                if stream_count % 30 == 0:
+                    logger.warning("No frame available for streaming")
             
             time.sleep(0.033)  # ~30 FPS
         
-        print("🛑 Video stream generator stopped")
+        logger.info("Video stream generator stopped")
     
     def start_relock_countdown(self):
         """Start the relock countdown (called after initial delay)"""
-        print("⏰ Starting 10-second relock countdown...")
+        logger.info("Starting 10-second relock countdown...")
         # Wait additional 10 seconds before relocking
         self._relock_timer = threading.Timer(10.0, self.relock_door)
         self._relock_timer.start()
-        print("✅ Relock timer started")
+    
+    def set_audio_language(self, language):
+        """Set the language for audio messages"""
+        self.AUDIO_LANGUAGE = language
+        logger.info(f"Audio language set to: {language}")
+    
+    def toggle_audio(self, enabled):
+        """Enable or disable audio messages"""
+        self.ENABLE_AUDIO = enabled
+        logger.info(f"Audio {'enabled' if enabled else 'disabled'}")
