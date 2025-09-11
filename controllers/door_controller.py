@@ -1,6 +1,7 @@
 import time
 import threading
 import logging
+import subprocess  # Added for eSpeak
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,31 @@ class DoorController:
         # Callbacks for external notifications
         self.on_door_locked = None
         self.on_door_unlocked = None
+        
+        # eSpeak settings
+        self.espeak_voice = getattr(config, 'ESPEAK_VOICE', 'en-us')
+        self.espeak_speed = getattr(config, 'ESPEAK_SPEED', 170)
+        self.espeak_pitch = getattr(config, 'ESPEAK_PITCH', 50)
+    
+    def speak(self, text, voice=None, speed=None, pitch=None):
+        """Use eSpeak to speak the given text aloud."""
+        try:
+            voice = voice or self.espeak_voice
+            speed = speed or self.espeak_speed
+            pitch = pitch or self.espeak_pitch
+            
+            command = [
+                'espeak',
+                '-v', voice,
+                '-s', str(speed),
+                '-p', str(pitch),
+                text
+            ]
+            # Use subprocess.Popen to run asynchronously so it doesn't block
+            subprocess.Popen(command)
+            logger.debug(f"Spoke: {text}")
+        except Exception as e:
+            logger.error(f"eSpeak error: {e}")
     
     def unlock_door(self, person_name, confidence, distance, method='recognition'):
         """Unlock the door for a recognized person"""
@@ -40,6 +66,10 @@ class DoorController:
         }
         
         logger.info(f"Door unlocked for {person_name} via {method} (confidence: {confidence:.1f}%)")
+        
+        # SPEAK: Access granted message
+        welcome_message = f"Welcome home {person_name}. Door unlocked."
+        self.speak(welcome_message)
         
         # Set unlock window expiration
         self.unlock_available_until = time.time() + self.config.DOOR_UNLOCK_DURATION
@@ -61,6 +91,12 @@ class DoorController:
         self.unlock_available_until = 0
         
         logger.info(f"Door locked via {method}")
+        
+        # SPEAK: Door locked message (only if not automatic relock to avoid spam)
+        if method != 'automatic':
+            self.speak("Door locked")
+        else:
+            self.speak("Door automatically locked")
         
         # Notify external systems
         if self.on_door_locked:
@@ -140,6 +176,10 @@ class DoorController:
                 'door_locked': False
             }
         else:
+            # SPEAK: Access denied to ESP32 request
+            if not self.is_unlock_window_valid():
+                self.speak("Access not authorized")
+            
             return {
                 'open': 0,
                 'message': 'WAITING',
@@ -163,6 +203,10 @@ class DoorController:
         )
         self._relock_timer.start()
         
+        # SPEAK: Countdown warning
+        countdown_msg = f"Door will lock in {int(self.config.DOOR_RELOCK_COUNTDOWN)} seconds"
+        self.speak(countdown_msg)
+        
         logger.info(f"Door will auto-relock in {self.config.DOOR_RELOCK_COUNTDOWN} seconds")
     
     def _auto_relock(self):
@@ -179,6 +223,9 @@ class DoorController:
             'method': 'facial_recognition'
         }
         
+        # SPEAK: Access denied
+        self.speak("Access denied. Person not recognized.")
+        
         logger.info("Access denied - unknown person")
     
     def _cancel_timers(self):
@@ -191,8 +238,12 @@ class DoorController:
             self._esp32_relock_timer.cancel()
             self._esp32_relock_timer = None
     
+    def test_speech(self, message="Testing speech synthesis"):
+        """Test method to verify eSpeak is working"""
+        self.speak(message)
+        return f"Spoke: {message}"
+    
     def cleanup(self):
         """Cleanup resources"""
         self._cancel_timers()
-        logger.info("Door controller cleaned up") 
-        #
+        logger.info("Door controller cleaned up")
