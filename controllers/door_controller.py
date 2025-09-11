@@ -2,16 +2,11 @@ import time
 import threading
 import logging
 from datetime import datetime
-import RPi.GPIO as GPIO
 
 logger = logging.getLogger(__name__)
 
-# In your config.py
-RELAY_PIN = 17  # GPIO pin number where relay is connected
-RELAY_ACTIVE_LOW = True  # Set to True if relay activates with LOW signal, False if with HIGH
-
 class DoorController:
-    """Handles door locking/unlocking logic and timers with relay control"""
+    """Handles door locking/unlocking logic and timers"""
     
     def __init__(self, config):
         self.config = config
@@ -26,52 +21,13 @@ class DoorController:
         # Callbacks for external notifications
         self.on_door_locked = None
         self.on_door_unlocked = None
-        
-        # Setup GPIO for relay control
-        self._setup_relay()
-    
-    def _setup_relay(self):
-        """Initialize GPIO for relay control"""
-        try:
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setup(self.config.RELAY_PIN, GPIO.OUT)
-            # Start with relay deactivated (door locked)
-            GPIO.output(self.config.RELAY_PIN, GPIO.HIGH if self.config.RELAY_ACTIVE_LOW else GPIO.LOW)
-            logger.info(f"Relay initialized on pin {self.config.RELAY_PIN} (active: {self.config.RELAY_ACTIVE_LOW})")
-        except Exception as e:
-            logger.error(f"Failed to initialize relay: {e}")
-    
-    def _activate_relay(self):
-        """Activate the relay to unlock the door (keep it on continuously)"""
-        try:
-            logger.info("Activating relay (door unlocked)")
-            if self.config.RELAY_ACTIVE_LOW:
-                GPIO.output(self.config.RELAY_PIN, GPIO.LOW)  # Active low
-            else:
-                GPIO.output(self.config.RELAY_PIN, GPIO.HIGH)  # Active high
-        except Exception as e:
-            logger.error(f"Error activating relay: {e}")
-    
-    def _deactivate_relay(self):
-        """Deactivate the relay to lock the door"""
-        try:
-            logger.info("Deactivating relay (door locked)")
-            if self.config.RELAY_ACTIVE_LOW:
-                GPIO.output(self.config.RELAY_PIN, GPIO.HIGH)  # Inactive state for active low
-            else:
-                GPIO.output(self.config.RELAY_PIN, GPIO.LOW)  # Inactive state for active high
-        except Exception as e:
-            logger.error(f"Error deactivating relay: {e}")
     
     def unlock_door(self, person_name, confidence, distance, method='recognition'):
         """Unlock the door for a recognized person"""
         # Cancel any existing timers
         self._cancel_timers()
         
-        # Activate relay to physically unlock the door (stays on)
-        self._activate_relay()
-        
-        # Update door state
+        # Unlock the door
         self.door_locked = False
         
         # Update last recognition
@@ -101,10 +57,6 @@ class DoorController:
         """Lock the door"""
         self._cancel_timers()
         
-        # Deactivate relay to physically lock the door
-        self._deactivate_relay()
-        
-        # Update door state
         self.door_locked = True
         self.unlock_available_until = 0
         
@@ -171,9 +123,6 @@ class DoorController:
         
         if should_open:
             person_name = self.last_recognition.get('name', 'KNOWN')
-            
-            # Activate relay to physically unlock the door for ESP32
-            self._activate_relay()
             
             # Clear the unlock window to prevent multiple opens
             self.unlock_available_until = 0
@@ -245,11 +194,5 @@ class DoorController:
     def cleanup(self):
         """Cleanup resources"""
         self._cancel_timers()
-        # Make sure to lock the door and deactivate relay on cleanup
-        if not self.door_locked:
-            self._deactivate_relay()
-        try:
-            GPIO.cleanup()
-        except:
-            pass
-        logger.info("Door controller cleaned up")
+        logger.info("Door controller cleaned up") 
+        #
