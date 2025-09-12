@@ -22,6 +22,9 @@ from app.face_utils import preprocess_face, get_embedding
 from app.db import load_embedding
 
 logger = logging.getLogger(__name__)
+import gc
+import psutil
+import threading
 
 class FacialRecognitionAPI:
     def __init__(self):
@@ -84,6 +87,9 @@ class FacialRecognitionAPI:
             {'id': 1, 'backend': cv2.CAP_ANY},
             {'id': 2, 'backend': cv2.CAP_ANY},
         ]
+        self._timer_lock = threading.Lock()
+        self._last_mqtt_image = 0
+        self._last_resource_check = 0
         
         # Create directories
         os.makedirs(self.CAPTURE_DIR, exist_ok=True)
@@ -159,37 +165,6 @@ class FacialRecognitionAPI:
             logger.error(f"Error publishing MQTT message: {e}")
             return False
     
-    def _publish_processed_image(self, frame, recognition_results):
-        """Publish processed image and results to MQTT"""
-        if frame is None:
-            return
-        
-        try:
-            # Convert frame to base64
-            img_base64 = self.frame_to_base64(frame)
-            
-            # Prepare message payload
-            timestamp = datetime.now().isoformat()
-            message = {
-                "timestamp": timestamp,
-                "image": img_base64,
-                "results": recognition_results,
-                "device_id": self.MQTT_CLIENT_ID
-            }
-            
-            # Convert to JSON
-            payload = json.dumps(message)
-            
-            # Publish to MQTT
-            success = self._publish_mqtt_message(self.MQTT_TOPIC_IMAGE, payload)
-            
-            if success:
-                self._debug_log("Processed image published to MQTT")
-            else:
-                logger.warning("Failed to publish processed image to MQTT")
-                
-        except Exception as e:
-            logger.error(f"Error preparing MQTT image message: {e}")
     
     def _publish_recognition_results(self, results):
         """Publish recognition results to MQTT"""
@@ -216,6 +191,38 @@ class FacialRecognitionAPI:
         except Exception as e:
             logger.error(f"Error preparing MQTT results message: {e}")
 
+    def _publish_processed_image(self, frame, recognition_results):
+        """CORRECTED: Memory-safe MQTT image publishing with rate limiting"""
+        try:
+            # Rate limiting - only publish every 2 seconds minimum
+            current_time = time.time()
+            if current_time - self._last_mqtt_image < 2.0:
+                return False
+            
+            self._last_mqtt_image = current_time
+            
+            # Compress image to reduce memory usage
+            compressed_frame = cv2.resize(frame, (640, 480))
+            img_base64 = self.frame_to_base64(compressed_frame)
+            
+            message = {
+                "timestamp": datetime.now().isoformat(),
+                "image": img_base64,
+                "results": recognition_results,
+                "device_id": self.MQTT_CLIENT_ID
+            }
+            
+            payload = json.dumps(message)
+            success = self._publish_mqtt_message(self.MQTT_TOPIC_IMAGE, payload)
+            
+            # Immediate cleanup
+            del img_base64, message, payload, compressed_frame
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error in MQTT image publish: {e}")
+            return False
     def _init_audio_system(self):
         """Initialize pyttsx3 for audio playback"""
         try:
@@ -410,7 +417,7 @@ class FacialRecognitionAPI:
                 cap.release()
     
     def start_camera_stream(self, enable_recognition=False):
-        """Start continuous camera streaming with optional recognition"""
+        """CORRECTED: Memory-safe camera streaming"""
         logger.info(f"Starting camera stream (recognition: {enable_recognition})")
         
         def stream():
@@ -418,22 +425,28 @@ class FacialRecognitionAPI:
                 with self.camera_context() as cap:
                     self.cap = cap
                     self.stream_with_recognition = enable_recognition
-                    logger.info(f"Camera stream started (recognition: {enable_recognition})")
                     
                     frame_count = 0
                     consecutive_failures = 0
                     max_consecutive_failures = 10
                     last_fps_log = time.time()
                     last_mqtt_publish = 0
-                    mqtt_publish_interval = 2  # Publish to MQTT every 2 seconds
+                    mqtt_publish_interval = 2
                     
                     while self.is_running:
                         ret, frame = cap.read()
                         if ret and frame is not None:
-                            consecutive_failures = 0  # Reset failure counter
+                            consecutive_failures = 0
                             frame_count += 1
                             
-                            # Log FPS every 5 seconds
+                            # Resource monitoring every 50 frames
+                            if frame_count % 50 == 0:
+                                self._monitor_system_resources()
+                            
+                            # Garbage collection every 100 frames
+                            if frame_count % 100 == 0:
+                                gc.collect()
+                            
                             current_time = time.time()
                             if current_time - last_fps_log >= 5.0:
                                 fps = frame_count / (current_time - self.fps_start_time + 0.001)
@@ -441,62 +454,50 @@ class FacialRecognitionAPI:
                                 last_fps_log = current_time
                             
                             with self.frame_lock:
+                                # Clean up previous frames
+                                if hasattr(self, 'current_frame') and self.current_frame is not None:
+                                    del self.current_frame
+                                if hasattr(self, 'annotated_frame') and self.annotated_frame is not None:
+                                    del self.annotated_frame
+                                
                                 self.current_frame = frame.copy()
                                 
-                                # Process recognition if enabled
                                 if self.stream_with_recognition:
                                     annotated_frame, recognition_results = self.annotate_frame_with_recognition(frame.copy())
                                     self.annotated_frame = annotated_frame
                                     
-                                    # Publish to MQTT at regular intervals
+                                    # Publish to MQTT at controlled intervals
                                     if current_time - last_mqtt_publish >= mqtt_publish_interval:
                                         self._publish_processed_image(annotated_frame, recognition_results)
                                         last_mqtt_publish = current_time
+                                    
+                                    # Clean up local reference
+                                    del annotated_frame
                                 else:
                                     self.annotated_frame = frame.copy()
                         else:
                             consecutive_failures += 1
-                            logger.warning(f"Failed to capture frame ({consecutive_failures}/{max_consecutive_failures})")
+                            if consecutive_failures % 3 == 0:
+                                healthy, message = self.check_camera_health()
+                                if not healthy:
+                                    logger.warning(f"Camera health check failed: {message}")
                             
-                            # ADD THE HEALTH CHECK CODE RIGHT HERE
-                            if consecutive_failures > 0:
-                                # Try a health check after a few failures
-                                if consecutive_failures % 3 == 0:
-                                    healthy, message = self.check_camera_health()
-                                    if not healthy:
-                                        logger.warning(f"Camera health check failed: {message}")
-                                        # Try to reinitialize if health check fails
-                                        if consecutive_failures % 6 == 0:
-                                            self.reinitialize_camera()
-                            
-                            # If too many consecutive failures, try to reopen camera
                             if consecutive_failures >= max_consecutive_failures:
-                                logger.error("Too many consecutive capture failures, attempting to reopen camera...")
-                                break  # Break out to reopen camera
-                                    
+                                logger.error("Too many consecutive failures, restarting camera...")
+                                break
+                        
                         time.sleep(0.033)  # ~30 FPS
-                    
-                    logger.info("Camera stream loop ended")
-                    
+                        
             except Exception as e:
-                logger.error(f"Camera stream error: {e}")
+                    logger.error(f"Camera stream error: {e}")
             finally:
-                self._cleanup_camera_resources()
-                
-            # If we broke due to failures, wait a bit and try to restart
-            if self.is_running and consecutive_failures >= max_consecutive_failures:
-                logger.warning("Attempting to restart camera stream after failures...")
-                time.sleep(2.0)  # Wait before restarting
-                self.start_camera_stream(enable_recognition)
-        
-        if not self.is_running:
-            logger.info("Starting camera stream thread...")
-            self.is_running = True
-            self.stream_active = True
-            threading.Thread(target=stream, daemon=True).start()
-        else:
-            logger.warning("Camera stream already running")
-            
+                    self._cleanup_camera_resources()
+                    
+            if not self.is_running:
+                self.is_running = True
+                self.stream_active = True
+                threading.Thread(target=stream, daemon=True).start() 
+                  
     def reinitialize_camera(self):
         """Attempt to reinitialize the camera connection"""
         logger.info("Attempting to reinitialize camera...")
@@ -515,20 +516,20 @@ class FacialRecognitionAPI:
             return False
         
     def check_camera_health(self):
-        """Check if camera is functioning properly"""
-        if self.cap is None:
-            return False, "Camera not initialized"
-        
-        # Try to read a frame
-        ret, frame = self.cap.read()
-        if not ret or frame is None:
-            return False, "Failed to read frame"
-        
-        # Check frame properties
-        if frame.size == 0:
-            return False, "Empty frame"
-        
-        return True, "Camera is healthy"
+        try:
+            ret, frame = self.cap.read()
+            if not ret or frame is None:
+                return False, "Failed to read frame"
+            
+            if frame.size == 0:
+                del frame  # Clean up
+                return False, "Empty frame"
+            
+            del frame  # Always clean up
+            return True, "Camera is healthy"
+        except Exception as e:
+            return False, f"Health check error: {e}"
+    
     def _cleanup_camera_resources(self):
         """Clean up camera resources"""
         self._debug_log("Cleaning up camera resources...")
@@ -556,52 +557,53 @@ class FacialRecognitionAPI:
             return self.current_frame.copy() if self.current_frame is not None else None
     
     def detect_and_recognize_faces(self, frame):
-        """Detect and recognize faces in a frame"""
-        self._debug_log("Starting face detection and recognition...")
+        """CORRECTED: Memory-safe face detection"""
+        processing_frame = None
+        gray = None
         
-        if frame is None:
-            logger.warning("No frame provided for face detection")
-            return []
-        
-        # Resize frame for faster processing if needed
-        if self.is_raspberry_pi:
-            processing_frame = cv2.resize(frame, (320, 240))
-            scale_x = frame.shape[1] / processing_frame.shape[1]
-            scale_y = frame.shape[0] / processing_frame.shape[0]
-        else:
-            processing_frame = frame.copy()
-            scale_x = scale_y = 1.0
-        
-        gray = cv2.cvtColor(processing_frame, cv2.COLOR_BGR2GRAY)
-        faces = self.face_detector.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-        
-        self._debug_log(f"Found {len(faces)} faces")
-        
-        results = []
-        for i, (x, y, w, h) in enumerate(faces):
-            # Scale back to original frame size
-            x, y, w, h = int(x * scale_x), int(y * scale_y), int(w * scale_x), int(h * scale_y)
+        try:
+            if frame is None:
+                return []
             
-            # Recognize face
-            name, distance = self.recognize_face(frame, (x, y, w, h))
+            # Resize for processing
+            if self.is_raspberry_pi:
+                processing_frame = cv2.resize(frame, (320, 240))
+                scale_x = frame.shape[1] / processing_frame.shape[1]
+                scale_y = frame.shape[0] / processing_frame.shape[0]
+            else:
+                processing_frame = frame.copy()
+                scale_x = scale_y = 1.0
             
-            face_result = {
-                'bbox': [x, y, w, h],
-                'name': name,
-                'confidence': (1 - distance) * 100 if distance < 1.0 else 0,
-                'distance': distance,
-                'recognized': name != "UNKNOWN"
-            }
+            gray = cv2.cvtColor(processing_frame, cv2.COLOR_BGR2GRAY)
+            faces = self.face_detector.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
             
-            results.append(face_result)
-            self._debug_log(f"Face {i+1} processed: {name} (confidence: {face_result['confidence']:.1f}%)")
-        
-        if len(results) > 0:
-            logger.info(f"Face detection complete: {len(results)} faces processed")
-        
-        return results
-    
+            results = []
+            for i, (x, y, w, h) in enumerate(faces):
+                # Scale back to original frame size
+                x, y, w, h = int(x * scale_x), int(y * scale_y), int(w * scale_x), int(h * scale_y)
+                
+                # Recognize face
+                name, distance = self.recognize_face(frame, (x, y, w, h))
+                
+                face_result = {
+                    'bbox': [x, y, w, h],
+                    'name': name,
+                    'confidence': (1 - distance) * 100 if distance < 1.0 else 0,
+                    'distance': distance,
+                    'recognized': name != "UNKNOWN"
+                }
+                results.append(face_result)
+            
+            return results
+            
+        finally:
+            # Always clean up temporary arrays
+            if processing_frame is not None:
+                del processing_frame
+            if gray is not None:
+                del gray
+            
     def annotate_frame_with_recognition(self, frame):
         """Annotate frame with face recognition results and return both frame and results"""
         faces = self.detect_and_recognize_faces(frame)
@@ -756,13 +758,10 @@ class FacialRecognitionAPI:
         return result
     
     def unlock_door(self, name, distance):
-        """Unlock the door for recognized person"""
+        """CORRECTED: Thread-safe door unlocking with proper timer management"""
         logger.info(f"UNLOCKING DOOR for {name}!")
         
-        # Unlock the door
         self.door_locked = False
-        
-        # Update last recognition
         self.last_recognition = {
             'name': name,
             'timestamp': datetime.now().isoformat(),
@@ -770,23 +769,118 @@ class FacialRecognitionAPI:
             'status': 'GRANTED'
         }
         
-        # Log the access
         self.log_access(name, "GRANTED", distance)
-        
-        # Speak welcome message
         self._speak_access_message(name, True)
-        
-        # Set a timestamp for when the unlock window expires (15 seconds total)
         self.door_unlock_available_until = time.time() + 15
         
-        # Cancel any existing auto-relock timer and start a new one
-        if hasattr(self, '_relock_timer') and self._relock_timer:
-            self._relock_timer.cancel()
+        # Thread-safe timer management
+        with self._timer_lock:
+            if hasattr(self, '_relock_timer') and self._relock_timer:
+                self._relock_timer.cancel()
+                # Wait for timer to finish (non-blocking)
+                try:
+                    self._relock_timer.join(timeout=0.5)
+                except:
+                    pass
+            
+            self._relock_timer = threading.Timer(5.0, self.start_relock_countdown)
+            self._relock_timer.daemon = True  # Prevent hanging on exit
+            self._relock_timer.start()
+            
+    def _cleanup_camera_resources(self):
+        """CORRECTED: Enhanced camera cleanup"""
+        logger.info("Cleaning up camera resources...")
+        self.cap = None
         
-        # Wait 5 seconds before starting the relock countdown
-        self._relock_timer = threading.Timer(5.0, self.start_relock_countdown)
-        self._relock_timer.start()
+        with self.frame_lock:
+            if hasattr(self, 'current_frame') and self.current_frame is not None:
+                del self.current_frame
+                self.current_frame = None
+            if hasattr(self, 'annotated_frame') and self.annotated_frame is not None:
+                del self.annotated_frame
+                self.annotated_frame = None
         
+        # Force garbage collection
+        gc.collect()
+        logger.info("Camera cleanup complete")
+
+    def _monitor_system_resources(self):
+        """NEW: Monitor system resources and take action if needed"""
+        try:
+            current_time = time.time()
+            if current_time - self._last_resource_check < 5.0:  # Check every 5 seconds max
+                return
+            
+            self._last_resource_check = current_time
+            
+            memory_percent = psutil.virtual_memory().percent
+            cpu_percent = psutil.cpu_percent(interval=0.1)
+            
+            if memory_percent > 85:
+                logger.warning(f"High memory usage: {memory_percent}% - forcing cleanup")
+                gc.collect()
+                
+                # If still high, clear some buffers
+                if psutil.virtual_memory().percent > 90:
+                    with self.frame_lock:
+                        if hasattr(self, 'current_frame'):
+                            self.current_frame = None
+                        if hasattr(self, 'annotated_frame'):
+                            self.annotated_frame = None
+                    gc.collect()
+            
+            if cpu_percent > 95:
+                logger.warning(f"High CPU usage: {cpu_percent}%")
+                time.sleep(0.1)  # Brief pause to let system recover
+                
+        except Exception as e:
+            logger.error(f"Resource monitoring error: {e}")
+
+    def shutdown(self):
+        """NEW: Graceful shutdown with complete cleanup"""
+        logger.info("Initiating graceful shutdown...")
+        
+        # Stop camera stream
+        self.is_running = False
+        self.stream_active = False
+        
+        # Wait a moment for threads to stop
+        time.sleep(1.0)
+        
+        # Cancel timers
+        with self._timer_lock:
+            if hasattr(self, '_relock_timer') and self._relock_timer:
+                self._relock_timer.cancel()
+        
+        # Disconnect MQTT
+        if self.mqtt_client:
+            try:
+                self.mqtt_client.loop_stop()
+                self.mqtt_client.disconnect()
+            except:
+                pass
+        
+        # Final cleanup
+        self._cleanup_camera_resources()
+        
+        # Force final garbage collection
+        gc.collect()
+        
+        logger.info("Shutdown complete")
+
+    def get_current_frame(self, annotated=False):
+        """CORRECTED: Safe frame retrieval with memory management"""
+        with self.frame_lock:
+            try:
+                if annotated and hasattr(self, 'annotated_frame') and self.annotated_frame is not None:
+                    return self.annotated_frame.copy()
+                elif hasattr(self, 'current_frame') and self.current_frame is not None:
+                    return self.current_frame.copy()
+                else:
+                    return None
+            except Exception as e:
+                logger.error(f"Error getting frame: {e}")
+                return None       
     def deny_access(self):
         """Deny access for unknown person"""
         logger.info("ACCESS DENIED - Unknown person")
