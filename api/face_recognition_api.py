@@ -616,15 +616,17 @@ class FacialRecognitionAPI:
                 box_color = (0, 255, 0)  # Green for recognized
                 text_color = (0, 255, 0)
                 status = "ACCESS GRANTED"
+                self.door_locked = False
                 if self.door_locked:  # Only speak when status changes
-                    self.door_locked = False
+                    
                     self._speak_access_message(name, True)
             else:
                 box_color = (0, 0, 255)  # Red for unknown
                 text_color = (0, 0, 255)
                 status = "ACCESS DENIED"
+                self.door_locked = True
                 if not self.door_locked:  # Only speak when status changes
-                    self.door_locked = True
+                    
                     self._speak_access_message(name, False)
             
             # Draw main bounding box
