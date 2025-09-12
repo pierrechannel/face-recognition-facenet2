@@ -342,26 +342,41 @@ class FacialRecognitionAPI:
             
             self._debug_log(f"Trying camera {camera_id} with backend {backend}")
             
+            # Add timeout and retry parameters
             cap = cv2.VideoCapture(camera_id, backend)
+            
+            # Set timeout properties if supported
+            if hasattr(cv2, 'CAP_PROP_OPEN_TIMEOUT_MSEC'):
+                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)  # 5 second timeout
             
             if not cap.isOpened():
                 return None
             
-            # Test if we can read a frame
-            ret, frame = cap.read()
-            if not ret or frame is None:
+            # Test if we can read multiple frames to ensure stability
+            successful_frames = 0
+            for _ in range(5):  # Try to read 5 frames
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    successful_frames += 1
+                time.sleep(0.1)  # Small delay between tests
+            
+            if successful_frames < 3:  # Require at least 3 successful frames
                 cap.release()
                 return None
             
-            # Set camera properties
-            if self.is_raspberry_pi:
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                cap.set(cv2.CAP_PROP_FPS, 15)
-            else:
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-                cap.set(cv2.CAP_PROP_FPS, 30)
+            # Set camera properties with error handling
+            try:
+                if self.is_raspberry_pi:
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    cap.set(cv2.CAP_PROP_FPS, 15)
+                else:
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                    cap.set(cv2.CAP_PROP_FPS, 30)
+            except Exception as prop_error:
+                self._debug_log(f"Could not set all camera properties: {prop_error}")
+                # Continue anyway - some properties might be set
             
             logger.info(f"Camera {camera_id} opened successfully with backend {backend}")
             return cap
@@ -369,7 +384,6 @@ class FacialRecognitionAPI:
         except Exception as e:
             self._debug_log(f"Failed to open camera {config['id']} with backend {config['backend']}: {e}")
             return None
-    
     @contextmanager
     def camera_context(self):
         """Context manager for camera operations with fallback"""
@@ -407,13 +421,16 @@ class FacialRecognitionAPI:
                     logger.info(f"Camera stream started (recognition: {enable_recognition})")
                     
                     frame_count = 0
+                    consecutive_failures = 0
+                    max_consecutive_failures = 10
                     last_fps_log = time.time()
                     last_mqtt_publish = 0
                     mqtt_publish_interval = 2  # Publish to MQTT every 2 seconds
                     
                     while self.is_running:
                         ret, frame = cap.read()
-                        if ret:
+                        if ret and frame is not None:
+                            consecutive_failures = 0  # Reset failure counter
                             frame_count += 1
                             
                             # Log FPS every 5 seconds
@@ -438,7 +455,24 @@ class FacialRecognitionAPI:
                                 else:
                                     self.annotated_frame = frame.copy()
                         else:
-                            logger.warning("Failed to capture frame")
+                            consecutive_failures += 1
+                            logger.warning(f"Failed to capture frame ({consecutive_failures}/{max_consecutive_failures})")
+                            
+                            # ADD THE HEALTH CHECK CODE RIGHT HERE
+                            if consecutive_failures > 0:
+                                # Try a health check after a few failures
+                                if consecutive_failures % 3 == 0:
+                                    healthy, message = self.check_camera_health()
+                                    if not healthy:
+                                        logger.warning(f"Camera health check failed: {message}")
+                                        # Try to reinitialize if health check fails
+                                        if consecutive_failures % 6 == 0:
+                                            self.reinitialize_camera()
+                            
+                            # If too many consecutive failures, try to reopen camera
+                            if consecutive_failures >= max_consecutive_failures:
+                                logger.error("Too many consecutive capture failures, attempting to reopen camera...")
+                                break  # Break out to reopen camera
                                     
                         time.sleep(0.033)  # ~30 FPS
                     
@@ -448,6 +482,12 @@ class FacialRecognitionAPI:
                 logger.error(f"Camera stream error: {e}")
             finally:
                 self._cleanup_camera_resources()
+                
+            # If we broke due to failures, wait a bit and try to restart
+            if self.is_running and consecutive_failures >= max_consecutive_failures:
+                logger.warning("Attempting to restart camera stream after failures...")
+                time.sleep(2.0)  # Wait before restarting
+                self.start_camera_stream(enable_recognition)
         
         if not self.is_running:
             logger.info("Starting camera stream thread...")
@@ -456,7 +496,39 @@ class FacialRecognitionAPI:
             threading.Thread(target=stream, daemon=True).start()
         else:
             logger.warning("Camera stream already running")
-    
+            
+    def reinitialize_camera(self):
+        """Attempt to reinitialize the camera connection"""
+        logger.info("Attempting to reinitialize camera...")
+        
+        # Clean up existing resources
+        self._cleanup_camera_resources()
+        
+        # Try to reopen camera
+        try:
+            with self.camera_context() as cap:
+                self.cap = cap
+                logger.info("Camera reinitialized successfully")
+                return True
+        except Exception as e:
+            logger.error(f"Failed to reinitialize camera: {e}")
+            return False
+        
+    def check_camera_health(self):
+        """Check if camera is functioning properly"""
+        if self.cap is None:
+            return False, "Camera not initialized"
+        
+        # Try to read a frame
+        ret, frame = self.cap.read()
+        if not ret or frame is None:
+            return False, "Failed to read frame"
+        
+        # Check frame properties
+        if frame.size == 0:
+            return False, "Empty frame"
+        
+        return True, "Camera is healthy"
     def _cleanup_camera_resources(self):
         """Clean up camera resources"""
         self._debug_log("Cleaning up camera resources...")
