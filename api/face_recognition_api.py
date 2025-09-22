@@ -48,6 +48,8 @@ class FacialRecognitionAPI:
         self.stream_with_recognition = False
         self.fps_counter = 0
         self.fps_start_time = time.time()
+        self.camera_error = None
+        self.active_camera_id = None
         
         # Create directories
         os.makedirs(self.CAPTURE_DIR, exist_ok=True)
@@ -93,56 +95,149 @@ class FacialRecognitionAPI:
                     embeddings[name] = embedding
         return embeddings
     
+    def test_camera_access(self):
+        """Test camera access and return available cameras"""
+        available_cameras = []
+        
+        # Test multiple camera backends and indices
+        backends = [cv2.CAP_DSHOW, cv2.CAP_V4L2, cv2.CAP_ANY] if not self.is_raspberry_pi else [cv2.CAP_V4L2, cv2.CAP_ANY]
+        
+        for camera_id in range(5):  # Test cameras 0-4
+            for backend in backends:
+                try:
+                    cap = cv2.VideoCapture(camera_id, backend)
+                    if cap.isOpened():
+                        ret, frame = cap.read()
+                        if ret and frame is not None:
+                            available_cameras.append({
+                                'id': camera_id,
+                                'backend': backend,
+                                'resolution': (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), 
+                                             int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+                            })
+                            logger.info(f"Camera {camera_id} with backend {backend} is working")
+                        cap.release()
+                        break  # Found working camera, try next ID
+                    cap.release()
+                except Exception as e:
+                    logger.debug(f"Camera {camera_id} with backend {backend} failed: {e}")
+                    continue
+        
+        return available_cameras
+    
     @contextmanager
-    def camera_context(self, camera_id=0):
-        """Context manager for camera operations"""
+    def camera_context(self, camera_id=0, backend=None):
+        """Context manager for camera operations with enhanced error handling"""
         cap = None
         try:
-            if self.is_raspberry_pi:
-                cap = cv2.VideoCapture(camera_id)
-            else:
-                cap = cv2.VideoCapture(camera_id, cv2.CAP_DSHOW)
+            # Determine backend
+            if backend is None:
+                if self.is_raspberry_pi:
+                    backend = cv2.CAP_V4L2
+                else:
+                    backend = cv2.CAP_DSHOW
+            
+            logger.info(f"Attempting to open camera {camera_id} with backend {backend}")
+            cap = cv2.VideoCapture(camera_id, backend)
             
             if not cap.isOpened():
-                raise Exception(f"Cannot open camera {camera_id}")
+                raise Exception(f"Cannot open camera {camera_id} with backend {backend}")
             
-            # Set camera properties
-            if self.is_raspberry_pi:
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                cap.set(cv2.CAP_PROP_FPS, 15)
-            else:
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-                cap.set(cv2.CAP_PROP_FPS, 30)
+            # Test if we can actually read frames
+            ret, test_frame = cap.read()
+            if not ret or test_frame is None:
+                raise Exception(f"Camera {camera_id} opened but cannot read frames")
             
+            # Set camera properties with error handling
+            try:
+                if self.is_raspberry_pi:
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    cap.set(cv2.CAP_PROP_FPS, 15)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                else:
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                    cap.set(cv2.CAP_PROP_FPS, 30)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                
+                # Verify settings
+                actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                actual_fps = cap.get(cv2.CAP_PROP_FPS)
+                
+                logger.info(f"Camera {camera_id} configured: {actual_width}x{actual_height} @ {actual_fps} FPS")
+                
+            except Exception as e:
+                logger.warning(f"Could not set camera properties: {e}")
+            
+            self.active_camera_id = camera_id
             yield cap
             
+        except Exception as e:
+            logger.error(f"Camera context error: {e}")
+            self.camera_error = str(e)
+            raise
         finally:
             if cap:
                 cap.release()
+            self.active_camera_id = None
     
     def start_camera_stream(self, enable_recognition=False):
         """Start continuous camera streaming with optional recognition"""
         def stream():
             try:
-                # Try different camera indices
-                for camera_id in [0, 1, 2]:
+                # First, test available cameras
+                available_cameras = self.test_camera_access()
+                
+                if not available_cameras:
+                    self.camera_error = "No cameras available"
+                    logger.error("No cameras found")
+                    return
+                
+                logger.info(f"Found {len(available_cameras)} available cameras")
+                
+                # Try each available camera
+                for camera_info in available_cameras:
                     try:
-                        with self.camera_context(camera_id) as cap:
+                        camera_id = camera_info['id']
+                        backend = camera_info['backend']
+                        
+                        with self.camera_context(camera_id, backend) as cap:
                             self.cap = cap
                             self.stream_with_recognition = enable_recognition
+                            self.camera_error = None
+                            
                             logger.info(f"Camera stream started on camera {camera_id} (recognition: {enable_recognition})")
                             
+                            frame_count = 0
+                            last_frame_time = time.time()
+                            
                             while self.is_running:
-                                ret, frame = cap.read()
-                                if ret:
-                                    # Update frame counter for FPS calculation
-                                    self.fps_counter += 1
+                                try:
+                                    ret, frame = cap.read()
                                     current_time = time.time()
-                                    if current_time - self.fps_start_time >= 1.0:
-                                        self.fps_start_time = current_time
-                                        self.fps_counter = 0
+                                    
+                                    if not ret or frame is None:
+                                        logger.warning("Failed to read frame")
+                                        # Try to reinitialize camera
+                                        time.sleep(0.1)
+                                        continue
+                                    
+                                    # Check if frame is all black (common issue)
+                                    if np.mean(frame) < 1.0:
+                                        logger.warning("Received black frame")
+                                        time.sleep(0.1)
+                                        continue
+                                    
+                                    frame_count += 1
+                                    
+                                    # Calculate actual FPS
+                                    if current_time - last_frame_time >= 1.0:
+                                        actual_fps = frame_count / (current_time - last_frame_time)
+                                        logger.debug(f"Actual FPS: {actual_fps:.1f}")
+                                        frame_count = 0
+                                        last_frame_time = current_time
                                     
                                     with self.frame_lock:
                                         self.current_frame = frame.copy()
@@ -152,17 +247,32 @@ class FacialRecognitionAPI:
                                             self.annotated_frame = self.annotate_frame_with_recognition(frame.copy())
                                         else:
                                             self.annotated_frame = frame.copy()
-                                            
-                                time.sleep(0.033)  # ~30 FPS
-                            break
+                                    
+                                    # Adaptive sleep based on processing time
+                                    processing_time = time.time() - current_time
+                                    target_interval = 0.033  # ~30 FPS
+                                    sleep_time = max(0.001, target_interval - processing_time)
+                                    time.sleep(sleep_time)
+                                    
+                                except Exception as e:
+                                    logger.error(f"Frame processing error: {e}")
+                                    time.sleep(0.1)
+                                    continue
+                            
+                            logger.info("Camera stream stopped normally")
+                            return  # Successfully streamed, exit function
+                            
                     except Exception as e:
-                        logger.warning(f"Failed to open camera {camera_id}: {e}")
+                        logger.warning(f"Camera {camera_info['id']} failed: {e}")
                         continue
-                else:
-                    logger.error("No cameras available")
-                    
+                
+                # If we get here, all cameras failed
+                self.camera_error = "All cameras failed to initialize"
+                logger.error("All available cameras failed")
+                        
             except Exception as e:
                 logger.error(f"Camera stream error: {e}")
+                self.camera_error = str(e)
             finally:
                 self.cap = None
                 with self.frame_lock:
@@ -173,6 +283,13 @@ class FacialRecognitionAPI:
             self.is_running = True
             self.stream_active = True
             threading.Thread(target=stream, daemon=True).start()
+            
+            # Give the camera a moment to initialize
+            time.sleep(2)
+            
+            # Check if camera started successfully
+            if self.camera_error:
+                logger.error(f"Camera failed to start: {self.camera_error}")
     
     def stop_camera_stream(self):
         """Stop camera streaming"""
@@ -181,6 +298,7 @@ class FacialRecognitionAPI:
         self.stream_with_recognition = False
         if self.cap:
             self.cap = None
+        time.sleep(0.5)  # Give time for threads to clean up
     
     def get_current_frame(self, annotated=False):
         """Get the current frame from camera stream"""
@@ -188,6 +306,32 @@ class FacialRecognitionAPI:
             if annotated and self.annotated_frame is not None:
                 return self.annotated_frame.copy()
             return self.current_frame.copy() if self.current_frame is not None else None
+    
+    def get_camera_status(self):
+        """Get current camera status"""
+        return {
+            'active': self.stream_active,
+            'camera_id': self.active_camera_id,
+            'has_frame': self.current_frame is not None,
+            'error': self.camera_error,
+            'recognition_enabled': self.stream_with_recognition
+        }
+    
+    def capture_test_frame(self, camera_id=0):
+        """Capture a single test frame to verify camera functionality"""
+        try:
+            with self.camera_context(camera_id) as cap:
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    # Save test frame
+                    test_path = os.path.join(self.CAPTURE_DIR, f"test_frame_{camera_id}.jpg")
+                    cv2.imwrite(test_path, frame)
+                    logger.info(f"Test frame saved to {test_path}")
+                    return frame, None
+                else:
+                    return None, "Failed to capture frame"
+        except Exception as e:
+            return None, str(e)
     
     def detect_and_recognize_faces(self, frame):
         """Detect and recognize faces in a frame"""
@@ -287,12 +431,13 @@ class FacialRecognitionAPI:
             f"Door: {'LOCKED' if self.door_locked else 'UNLOCKED'}",
             f"Faces: {len(faces)}",
             f"Known: {len(self.saved_embeddings)}",
+            f"Camera: {self.active_camera_id or 'None'}",
             f"Time: {datetime.now().strftime('%H:%M:%S')}"
         ]
         
         # Background for system info
-        cv2.rectangle(frame, (10, 10), (300, 120), (0, 0, 0), -1)
-        cv2.rectangle(frame, (10, 10), (300, 120), (100, 100, 100), 2)
+        cv2.rectangle(frame, (10, 10), (300, 140), (0, 0, 0), -1)
+        cv2.rectangle(frame, (10, 10), (300, 140), (100, 100, 100), 2)
         
         for i, text in enumerate(overlay_text):
             cv2.putText(frame, text, (20, 35 + i * 25), 
@@ -436,6 +581,8 @@ class FacialRecognitionAPI:
     
     def frame_to_base64(self, frame):
         """Convert frame to base64 string"""
+        if frame is None:
+            return None
         _, buffer = cv2.imencode('.jpg', frame)
         img_str = base64.b64encode(buffer).decode('utf-8')
         return img_str
@@ -445,11 +592,27 @@ class FacialRecognitionAPI:
         while self.stream_active:
             frame = self.get_current_frame(annotated=annotated)
             if frame is not None:
-                # Encode frame as JPEG
-                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                frame_bytes = buffer.tobytes()
+                try:
+                    # Encode frame as JPEG
+                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    frame_bytes = buffer.tobytes()
+                    
+                    # Yield frame in multipart format
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                except Exception as e:
+                    logger.error(f"Frame encoding error: {e}")
+            else:
+                # Send a black frame or error frame if no camera feed
+                black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(black_frame, "Camera Not Available", (50, 240), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                if self.camera_error:
+                    cv2.putText(black_frame, f"Error: {self.camera_error}", (50, 280), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
                 
-                # Yield frame in multipart format
+                _, buffer = cv2.imencode('.jpg', black_frame)
+                frame_bytes = buffer.tobytes()
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
             
